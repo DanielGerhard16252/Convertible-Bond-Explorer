@@ -1,0 +1,9 @@
+{
+  "filters": [
+    {
+      "field": "credit_rating",
+      "operator": "equal",
+      "value": "BBB"
+    }
+  ]
+}
