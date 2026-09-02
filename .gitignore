@@ -8,3 +8,4 @@ build/
 *.spec
 .idea/
 .vscode/
+pytest-temp/

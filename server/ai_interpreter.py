@@ -13,10 +13,11 @@ client = OpenAI()
 SYSTEM_PROMPT = """
 Translate the user's convertible-bond search request into the supplied schema.
 
-You must always return exactly two filters:
+You must always return exactly three filters:
 
 1. credit_rating
 2. price
+3. coupon
 
 Do not add any other filters.
 
@@ -149,9 +150,79 @@ Examples:
   }
 }
 
+COUPON
+
+Required structure:
+
+{
+  "field": "coupon",
+  "operator": "between",
+  "value": {
+    "minimum": 0.1,
+    "maximum": 2.7
+  }
+}
+
+Rules:
+
+- The minimum and maximum values must be numbers or null.
+- Coupon boundaries are inclusive.
+- "Above", "over", "at least" and "minimum" set minimum.
+- "Below", "under", "at most" and "maximum" set maximum.
+- "Exactly" sets minimum and maximum to the same value.
+- If no coupon condition is specified, set the entire value to null.
+- Do not invent missing coupon limits.
+
+Examples:
+
+"Coupon between 0.1 and 2.7"
+
+{
+  "field": "coupon",
+  "operator": "between",
+  "value": {
+    "minimum": 0.1,
+    "maximum": 2.7
+  }
+}
+
+"Coupon above 0.1"
+
+{
+  "field": "coupon",
+  "operator": "between",
+  "value": {
+    "minimum": 0.1,
+    "maximum": null
+  }
+}
+
+"Coupon below 2.7"
+
+{
+  "field": "coupon",
+  "operator": "between",
+  "value": {
+    "minimum": null,
+    "maximum": 2.7
+  }
+}
+
+"Coupon exactly 1.4"
+
+{
+  "field": "coupon",
+  "operator": "between",
+  "value": {
+    "minimum": 1.4,
+    "maximum": 1.4
+  }
+}
+
+
 COMPLETE RESPONSE EXAMPLES
 
-"Show me BBB-rated bonds priced between 90 and 110"
+"Show me BBB-rated bonds priced between 90 and 110 with coupon between 0.1 and 2.7"
 
 {
   "filters": [
@@ -166,6 +237,15 @@ COMPLETE RESPONSE EXAMPLES
       "value": {
         "minimum": 90,
         "maximum": 110
+      }
+    },
+    {
+    
+      "field": "coupon",
+      "operator": "between",
+      "value": {
+        "minimum": 0.1,
+        "maximum": 2.7
       }
     }
   ]
@@ -182,6 +262,11 @@ COMPLETE RESPONSE EXAMPLES
     },
     {
       "field": "price",
+      "operator": "between",
+      "value": null
+    },
+    {
+      "field": "coupon",
       "operator": "between",
       "value": null
     }

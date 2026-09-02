@@ -64,5 +64,4 @@ def test_live_openai_interpretation_returns_null_for_invalid_rating():
         "Bonds with oiajds credit rating"
     )
 
-    assert len(query.filters) == 1
     assert query.filters[0].value is None

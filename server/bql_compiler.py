@@ -3,6 +3,7 @@ from shared.models import (
     SearchField,
     SearchOperator,
     PriceRange,
+    CouponRange,
     CreditRating,
 )
 
@@ -10,6 +11,7 @@ from shared.models import (
 BQL_FIELD_MAP = {
     SearchField.CREDIT_RATING: "BLOOMBERG_RATING_FIELD",
     SearchField.PRICE: "BLOOMBERG_PRICE_FIELD",
+    SearchField.COUPON: "BLOOMBERG_COUPON_FIELD",
 }
 
 
@@ -56,6 +58,33 @@ def compile_filter(search_filter) -> str | None:
         if price_range.maximum is not None:
             conditions.append(
                 f"{bql_field} <= {price_range.maximum:g}"
+            )
+
+        if not conditions:
+            return None
+
+        return f"({' AND '.join(conditions)})"
+
+    if search_filter.field == SearchField.COUPON:
+        if (
+            search_filter.operator
+            != SearchOperator.BETWEEN
+        ):
+            raise ValueError(
+                "Coupon requires the BETWEEN operator."
+            )
+
+        coupon_range: CouponRange = search_filter.value
+        conditions = []
+
+        if coupon_range.minimum is not None:
+            conditions.append(
+                f"{bql_field} >= {coupon_range.minimum:g}"
+            )
+
+        if coupon_range.maximum is not None:
+            conditions.append(
+                f"{bql_field} <= {coupon_range.maximum:g}"
             )
 
         if not conditions:

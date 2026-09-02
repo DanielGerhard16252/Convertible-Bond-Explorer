@@ -29,6 +29,7 @@ from server.bql_compiler import compile_query
 
 from shared.models import (
     BondSearchQuery,
+    CouponRange,
     CreditRating,
     PriceRange,
     SearchField,
@@ -156,6 +157,26 @@ class MainWindow(QMainWindow):
         self.price_layout.addWidget(self.maximum_price)
         self.price_group.setLayout(self.price_layout)
 
+        self.coupon_group = QGroupBox("Coupon")
+        self.coupon_layout = QHBoxLayout()
+        self.minimum_coupon = QLineEdit()
+        self.minimum_coupon.setPlaceholderText("Min")
+        self.maximum_coupon = QLineEdit()
+        self.maximum_coupon.setPlaceholderText("Max")
+
+        coupon_validator = QDoubleValidator(0.0, float("inf"), 6, self)
+        coupon_validator.setNotation(
+            QDoubleValidator.Notation.StandardNotation
+        )
+        self.minimum_coupon.setValidator(coupon_validator)
+        self.maximum_coupon.setValidator(coupon_validator)
+
+        self.coupon_layout.addWidget(QLabel("Min"))
+        self.coupon_layout.addWidget(self.minimum_coupon)
+        self.coupon_layout.addWidget(QLabel("Max"))
+        self.coupon_layout.addWidget(self.maximum_coupon)
+        self.coupon_group.setLayout(self.coupon_layout)
+
         self.submit_button = QPushButton("Submit")
         self.submit_button.clicked.connect(self.submit_search)
 
@@ -168,6 +189,7 @@ class MainWindow(QMainWindow):
         search_controls = QHBoxLayout()
         search_controls.addWidget(self.rating_group)
         search_controls.addWidget(self.price_group)
+        search_controls.addWidget(self.coupon_group)
         layout.addLayout(search_controls)
         layout.addWidget(self.submit_button)
 
@@ -264,11 +286,13 @@ class MainWindow(QMainWindow):
         try:
             minimum = self.parse_price(self.minimum_price.text())
             maximum = self.parse_price(self.maximum_price.text())
+            minimum_coupon = self.parse_price(self.minimum_coupon.text())
+            maximum_coupon = self.parse_price(self.maximum_coupon.text())
         except ValueError:
             QMessageBox.warning(
                 self,
-                "Invalid price",
-                "Enter valid numbers for minimum and maximum price.",
+                "Invalid range value",
+                "Enter valid numbers for price and coupon ranges.",
             )
             return
 
@@ -280,9 +304,29 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if (
+            minimum_coupon is not None
+            and maximum_coupon is not None
+            and minimum_coupon > maximum_coupon
+        ):
+            QMessageBox.warning(
+                self,
+                "Invalid coupon range",
+                "Minimum coupon cannot be greater than maximum coupon.",
+            )
+            return
+
         price_range = (
             PriceRange(minimum=minimum, maximum=maximum)
             if minimum is not None or maximum is not None
+            else None
+        )
+        coupon_range = (
+            CouponRange(
+                minimum=minimum_coupon,
+                maximum=maximum_coupon,
+            )
+            if minimum_coupon is not None or maximum_coupon is not None
             else None
         )
         query = BondSearchQuery(
@@ -296,6 +340,11 @@ class MainWindow(QMainWindow):
                     field=SearchField.PRICE,
                     operator=SearchOperator.BETWEEN,
                     value=price_range,
+                ),
+                SearchFilter(
+                    field=SearchField.COUPON,
+                    operator=SearchOperator.BETWEEN,
+                    value=coupon_range,
                 ),
             ]
         )
@@ -404,8 +453,24 @@ class MainWindow(QMainWindow):
             item.setCheckState(Qt.CheckState.Unchecked)
         self.minimum_price.clear()
         self.maximum_price.clear()
+        self.minimum_coupon.clear()
+        self.maximum_coupon.clear()
 
         for search_filter in query.filters:
+            if search_filter.field == SearchField.COUPON:
+                coupon_range = search_filter.value
+                if coupon_range is None or isinstance(coupon_range, list):
+                    continue
+                if coupon_range.minimum is not None:
+                    self.minimum_coupon.setText(
+                        f"{coupon_range.minimum:g}"
+                    )
+                if coupon_range.maximum is not None:
+                    self.maximum_coupon.setText(
+                        f"{coupon_range.maximum:g}"
+                    )
+                continue
+
             if search_filter.field == SearchField.PRICE:
                 price_range = search_filter.value
                 if not isinstance(price_range, PriceRange):

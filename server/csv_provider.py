@@ -5,6 +5,7 @@ import pandas as pd
 from shared.models import (
     BondSearchQuery,
     SearchField,
+    CouponRange,
     PriceRange,
 )
 
@@ -72,10 +73,30 @@ def load_bond_data(
                 results = results[
                     results["price"] >= price_range.minimum
                 ]
-                
+
             if price_range.maximum is not None:
                 results = results[
                     results["price"] <= price_range.maximum
+                ]
+        elif search_filter.field == SearchField.COUPON:
+            if "coupon" not in results.columns:
+                raise ValueError(
+                    "CSV is missing required column: coupon"
+                )
+
+            coupon_range: CouponRange = search_filter.value
+            results["coupon"] = pd.to_numeric(
+                results["coupon"], errors="coerce"
+            )
+
+            if coupon_range.minimum is not None:
+                results = results[
+                    results["coupon"] >= coupon_range.minimum
+                ]
+
+            if coupon_range.maximum is not None:
+                results = results[
+                    results["coupon"] <= coupon_range.maximum
                 ]
             
 

@@ -2,4 +2,4 @@
 markers = [
     "integration: tests that call external services such as the OpenAI API",
 ]
-addopts = '-m "not integration"'
+addopts = '-m "not integration" --basetemp=pytest-temp'
