@@ -16,6 +16,8 @@ def format_bql_value(value: str) -> str:
 
 
 def compile_filter(search_filter) -> str:
+    if search_filter.value is None:
+        return None
     if search_filter.operator != SearchOperator.EQUAL:
         raise ValueError(
             f"Unsupported operator: {search_filter.operator}"
@@ -30,10 +32,16 @@ def compile_filter(search_filter) -> str:
 
 
 def compile_query(query: BondSearchQuery) -> str:
-    conditions = [
-        compile_filter(search_filter)
-        for search_filter in query.filters
-    ]
+    conditions = []
+
+    for search_filter in query.filters:
+        condition = compile_filter(search_filter)
+
+        if condition is not None:
+            conditions.append(condition)
+
+    if not conditions:
+        return "ACTIVE_CONVERTIBLE_BOND_UNIVERSE"
 
     filter_expression = " AND ".join(conditions)
 

@@ -3,7 +3,7 @@ from server.bql_compiler import compile_query
 
 
 query = interpret_request_with_ai(
-    "Show me convertible bonds with a A- credit rating"
+    "Show me convertible bonds with oiajds credit rating"
 )
 
 print(query.model_dump_json(indent=2))

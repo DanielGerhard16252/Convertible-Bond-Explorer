@@ -11,17 +11,21 @@ load_dotenv()
 client = OpenAI()
 
 SYSTEM_PROMPT = """
-Translate natural-language convertible-bond search requests into
-structured search queries.
+Translate the user's convertible-bond search request into the supplied schema.
 
-The currently supported functionality is:
+Currently supported:
 
-- Search field: credit_rating
-- Operator: equal
-- Values: only the credit ratings permitted by the supplied schema
+- field: credit_rating
+- operator: equal
+- accepted values are defined by the schema
 
-Interpret only what the user explicitly requests.
-Do not invent additional filters.
+Always include the credit_rating filter.
+
+If the user provides a recognised credit rating, use it.
+
+If the rating is missing, invalid, ambiguous or unrecognised, set value to null.
+
+Never guess a rating or select the closest available rating.
 """
 
 

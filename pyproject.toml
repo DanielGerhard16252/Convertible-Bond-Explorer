@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that call external services such as the OpenAI API",
+]
+addopts = '-m "not integration"'

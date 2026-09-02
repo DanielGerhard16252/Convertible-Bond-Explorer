@@ -1,6 +1,6 @@
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SearchField(str, Enum):
@@ -39,7 +39,7 @@ class CreditRating(str, Enum):
 class SearchFilter(BaseModel):
     field: SearchField
     operator: SearchOperator
-    value: CreditRating
+    value: CreditRating | None = None
 
 
 class BondSearchQuery(BaseModel):
