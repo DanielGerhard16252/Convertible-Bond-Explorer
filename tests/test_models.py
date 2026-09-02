@@ -116,3 +116,34 @@ def test_null_numeric_range_filter(field):
 
     assert query.filters[0].value is None
 
+
+def test_valid_single_issuer_filter():
+    query = BondSearchQuery.model_validate(
+        {
+            "filters": [
+                {
+                    "field": "issuer",
+                    "operator": "equals",
+                    "value": "Acme Corporation",
+                }
+            ]
+        }
+    )
+
+    assert query.filters[0].value == "Acme Corporation"
+
+
+def test_rejects_multiple_issuers():
+    with pytest.raises(ValidationError):
+        BondSearchQuery.model_validate(
+            {
+                "filters": [
+                    {
+                        "field": "issuer",
+                        "operator": "equals",
+                        "value": ["Acme", "Example Inc"],
+                    }
+                ]
+            }
+        )
+

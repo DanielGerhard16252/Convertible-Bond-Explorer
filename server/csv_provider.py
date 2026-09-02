@@ -98,6 +98,20 @@ def load_bond_data(
                 results = results[
                     results["coupon"] <= coupon_range.maximum
                 ]
+        elif search_filter.field == SearchField.ISSUER:
+            if "issuer" not in results.columns:
+                raise ValueError(
+                    "CSV is missing required column: issuer"
+                )
+
+            issuer = str(search_filter.value).strip().casefold()
+            results = results[
+                results["issuer"]
+                .astype(str)
+                .str.strip()
+                .str.casefold()
+                == issuer
+            ]
             
 
     return results.reset_index(drop=True)

@@ -22,8 +22,9 @@ from PySide6.QtGui import (
 )
 
 import pandas as pd
+from datetime import date
 
-from server.csv_provider import load_bond_data
+from server.bloomberg_api import execute_bql
 from server.ai_interpreter import interpret_request_with_ai
 from server.bql_compiler import compile_query
 
@@ -31,6 +32,7 @@ from shared.models import (
     BondSearchQuery,
     CouponRange,
     CreditRating,
+    DateRange,
     PriceRange,
     SearchField,
     SearchFilter,
@@ -177,6 +179,50 @@ class MainWindow(QMainWindow):
         self.coupon_layout.addWidget(self.maximum_coupon)
         self.coupon_group.setLayout(self.coupon_layout)
 
+        self.issuer_group = QGroupBox("Issuer")
+        self.issuer_layout = QHBoxLayout()
+        self.issuer_input = QLineEdit()
+        self.issuer_input.setPlaceholderText("Issuer name")
+        self.issuer_layout.addWidget(self.issuer_input)
+        self.issuer_group.setLayout(self.issuer_layout)
+
+        self.maturity_group = QGroupBox("Maturity (YYYY-MM-DD)")
+        self.maturity_layout = QHBoxLayout()
+        self.minimum_maturity = QLineEdit()
+        self.minimum_maturity.setPlaceholderText("Min")
+        self.maximum_maturity = QLineEdit()
+        self.maximum_maturity.setPlaceholderText("Max")
+        self.maturity_layout.addWidget(self.minimum_maturity)
+        self.maturity_layout.addWidget(self.maximum_maturity)
+        self.maturity_group.setLayout(self.maturity_layout)
+
+        self.currency_group = QGroupBox("Currency")
+        self.currency_layout = QHBoxLayout()
+        self.currency_input = QLineEdit()
+        self.currency_input.setPlaceholderText("USD")
+        self.currency_layout.addWidget(self.currency_input)
+        self.currency_group.setLayout(self.currency_layout)
+
+        self.analytics_inputs = {}
+        for key, title in (
+            ("conversion_premium", "Conversion premium"),
+            ("delta", "Delta"),
+            ("yield_to_maturity", "Yield to maturity"),
+        ):
+            group = QGroupBox(title)
+            group_layout = QHBoxLayout()
+            minimum_input = QLineEdit()
+            maximum_input = QLineEdit()
+            minimum_input.setPlaceholderText("Min")
+            maximum_input.setPlaceholderText("Max")
+            validator = QDoubleValidator(-float("inf"), float("inf"), 6, self)
+            minimum_input.setValidator(validator)
+            maximum_input.setValidator(validator)
+            group_layout.addWidget(minimum_input)
+            group_layout.addWidget(maximum_input)
+            group.setLayout(group_layout)
+            self.analytics_inputs[key] = (group, minimum_input, maximum_input)
+
         self.submit_button = QPushButton("Submit")
         self.submit_button.clicked.connect(self.submit_search)
 
@@ -190,7 +236,14 @@ class MainWindow(QMainWindow):
         search_controls.addWidget(self.rating_group)
         search_controls.addWidget(self.price_group)
         search_controls.addWidget(self.coupon_group)
+        search_controls.addWidget(self.issuer_group)
         layout.addLayout(search_controls)
+        analytics_controls = QHBoxLayout()
+        analytics_controls.addWidget(self.maturity_group)
+        analytics_controls.addWidget(self.currency_group)
+        for group, _, _ in self.analytics_inputs.values():
+            analytics_controls.addWidget(group)
+        layout.addLayout(analytics_controls)
         layout.addWidget(self.submit_button)
 
         layout.addWidget(QLabel("Search results"))
@@ -288,11 +341,18 @@ class MainWindow(QMainWindow):
             maximum = self.parse_price(self.maximum_price.text())
             minimum_coupon = self.parse_price(self.minimum_coupon.text())
             maximum_coupon = self.parse_price(self.maximum_coupon.text())
+            analytics_values = {
+                key: (self.parse_price(inputs[1].text()),
+                      self.parse_price(inputs[2].text()))
+                for key, inputs in self.analytics_inputs.items()
+            }
+            minimum_maturity = self.parse_date(self.minimum_maturity.text())
+            maximum_maturity = self.parse_date(self.maximum_maturity.text())
         except ValueError:
             QMessageBox.warning(
                 self,
                 "Invalid range value",
-                "Enter valid numbers for price and coupon ranges.",
+                "Enter valid numbers and YYYY-MM-DD maturity dates.",
             )
             return
 
@@ -329,6 +389,30 @@ class MainWindow(QMainWindow):
             if minimum_coupon is not None or maximum_coupon is not None
             else None
         )
+        issuer = self.issuer_input.text().strip() or None
+        currency = self.currency_input.text().strip().upper() or None
+        maturity_range = (
+            DateRange(minimum=minimum_maturity, maximum=maximum_maturity)
+            if minimum_maturity is not None or maximum_maturity is not None
+            else None
+        )
+        analytics_ranges = {
+            key: (PriceRange(minimum=values[0], maximum=values[1])
+                  if values[0] is not None or values[1] is not None else None)
+            for key, values in analytics_values.items()
+        }
+
+        all_ranges = [
+            ("price", minimum, maximum),
+            ("coupon", minimum_coupon, maximum_coupon),
+            ("maturity", minimum_maturity, maximum_maturity),
+            *[(key, values[0], values[1])
+              for key, values in analytics_values.items()],
+        ]
+        if any(low is not None and high is not None and low > high
+               for _, low, high in all_ranges):
+            QMessageBox.warning(self, "Invalid range", "A minimum exceeds its maximum.")
+            return
         query = BondSearchQuery(
             filters=[
                 SearchFilter(
@@ -346,6 +430,26 @@ class MainWindow(QMainWindow):
                     operator=SearchOperator.BETWEEN,
                     value=coupon_range,
                 ),
+                SearchFilter(
+                    field=SearchField.ISSUER,
+                    operator=SearchOperator.EQUALS,
+                    value=issuer,
+                ),
+                SearchFilter(field=SearchField.MATURITY,
+                             operator=SearchOperator.BETWEEN,
+                             value=maturity_range),
+                SearchFilter(field=SearchField.CURRENCY,
+                             operator=SearchOperator.EQUALS,
+                             value=currency),
+                SearchFilter(field=SearchField.CONVERSION_PREMIUM,
+                             operator=SearchOperator.BETWEEN,
+                             value=analytics_ranges["conversion_premium"]),
+                SearchFilter(field=SearchField.DELTA,
+                             operator=SearchOperator.BETWEEN,
+                             value=analytics_ranges["delta"]),
+                SearchFilter(field=SearchField.YIELD_TO_MATURITY,
+                             operator=SearchOperator.BETWEEN,
+                             value=analytics_ranges["yield_to_maturity"]),
             ]
         )
 
@@ -354,7 +458,8 @@ class MainWindow(QMainWindow):
 
         try:
             self.bql_query = compile_query(query)
-            results = load_bond_data(query)
+            bql_results = execute_bql(self.bql_query)
+            results = pd.DataFrame(bql_results.to_dicts())
             self.results = results
             self.display_results(results)
         except Exception as error:
@@ -371,6 +476,11 @@ class MainWindow(QMainWindow):
     def parse_price(value: str) -> float | None:
         value = value.strip()
         return float(value) if value else None
+
+    @staticmethod
+    def parse_date(value: str) -> date | None:
+        value = value.strip()
+        return date.fromisoformat(value) if value else None
 
     def display_results(self, dataframe) -> None:
         self.results_table.setSortingEnabled(False)
@@ -455,8 +565,49 @@ class MainWindow(QMainWindow):
         self.maximum_price.clear()
         self.minimum_coupon.clear()
         self.maximum_coupon.clear()
+        self.issuer_input.clear()
+        self.minimum_maturity.clear()
+        self.maximum_maturity.clear()
+        self.currency_input.clear()
+        for _, minimum_input, maximum_input in self.analytics_inputs.values():
+            minimum_input.clear()
+            maximum_input.clear()
 
         for search_filter in query.filters:
+            if search_filter.field == SearchField.CURRENCY:
+                if isinstance(search_filter.value, str):
+                    self.currency_input.setText(search_filter.value)
+                continue
+
+            if search_filter.field == SearchField.MATURITY:
+                value_range = search_filter.value
+                if value_range is not None and not isinstance(value_range, list):
+                    if value_range.minimum is not None:
+                        self.minimum_maturity.setText(value_range.minimum.isoformat())
+                    if value_range.maximum is not None:
+                        self.maximum_maturity.setText(value_range.maximum.isoformat())
+                continue
+
+            analytics_key = {
+                SearchField.CONVERSION_PREMIUM: "conversion_premium",
+                SearchField.DELTA: "delta",
+                SearchField.YIELD_TO_MATURITY: "yield_to_maturity",
+            }.get(search_filter.field)
+            if analytics_key is not None:
+                value_range = search_filter.value
+                if value_range is not None and not isinstance(value_range, list):
+                    _, minimum_input, maximum_input = self.analytics_inputs[analytics_key]
+                    if value_range.minimum is not None:
+                        minimum_input.setText(f"{value_range.minimum:g}")
+                    if value_range.maximum is not None:
+                        maximum_input.setText(f"{value_range.maximum:g}")
+                continue
+
+            if search_filter.field == SearchField.ISSUER:
+                if isinstance(search_filter.value, str):
+                    self.issuer_input.setText(search_filter.value)
+                continue
+
             if search_filter.field == SearchField.COUPON:
                 coupon_range = search_filter.value
                 if coupon_range is None or isinstance(coupon_range, list):

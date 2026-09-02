@@ -1,4 +1,5 @@
 from enum import Enum
+from datetime import date
 
 from pydantic import BaseModel, Field
 
@@ -7,10 +8,17 @@ class SearchField(str, Enum):
     CREDIT_RATING = "credit_rating"
     PRICE = "price"
     COUPON = "coupon"
+    ISSUER = "issuer"
+    MATURITY = "maturity"
+    CURRENCY = "currency"
+    CONVERSION_PREMIUM = "conversion_premium"
+    DELTA = "delta"
+    YIELD_TO_MATURITY = "yield_to_maturity"
 
 class SearchOperator(str, Enum):
     IN = "in"
     BETWEEN = "between"
+    EQUALS = "equals"
 
 
 class CreditRating(str, Enum):
@@ -36,6 +44,7 @@ class CreditRating(str, Enum):
     CC = "CC"
     C = "C"
     D = "D"
+    NOT_RATED = "NR"
 
 class PriceRange(BaseModel):
     minimum: float | None = None
@@ -45,10 +54,15 @@ class CouponRange(BaseModel):
     minimum: float | None = None
     maximum: float | None = None
 
+
+class DateRange(BaseModel):
+    minimum: date | None = None
+    maximum: date | None = None
+
 class SearchFilter(BaseModel):
     field: SearchField
     operator: SearchOperator
-    value: list[CreditRating] | PriceRange | CouponRange | None = None
+    value: list[CreditRating] | PriceRange | CouponRange | DateRange | str | None = None
 
 
 class BondSearchQuery(BaseModel):

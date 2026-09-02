@@ -1,4 +1,5 @@
 import pytest
+from datetime import date
 
 from server.bql_compiler import compile_query
 from shared.models import BondSearchQuery
@@ -33,9 +34,18 @@ def test_null_rating_is_ignored_by_compiler():
         }
     )
 
-    assert compile_query(query) == "ACTIVE_CONVERTIBLE_BOND_UNIVERSE"
+    bql = compile_query(query)
+    assert bql.startswith("GET(")
+    assert "FOR(filter(bondsuniv('active'" in bql
 
-from server.ai_interpreter import interpret_request_with_ai
+from server.ai_interpreter import build_system_prompt, interpret_request_with_ai
+
+
+def test_system_prompt_includes_current_date():
+    prompt = build_system_prompt(date(2026, 9, 2))
+
+    assert prompt.startswith("Current date: 2026-09-02.")
+    assert "Resolve relative dates" in prompt
 
 
 def test_live_openai_interpretation():

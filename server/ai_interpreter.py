@@ -1,4 +1,5 @@
 import os
+from datetime import date
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -13,13 +14,26 @@ client = OpenAI()
 SYSTEM_PROMPT = """
 Translate the user's convertible-bond search request into the supplied schema.
 
-You must always return exactly three filters:
+You must always return exactly nine filters:
 
 1. credit_rating
 2. price
 3. coupon
+4. issuer
+5. maturity
+6. currency
+7. conversion_premium
+8. delta
+9. yield_to_maturity
 
 Do not add any other filters.
+
+For maturity use operator "between" and an object with ISO-8601 minimum and
+maximum dates. For currency use operator "equals" and a three-letter ISO code.
+For conversion_premium, delta, and yield_to_maturity use operator "between"
+and an object with numeric minimum and maximum values. Use null when a filter
+was not requested. Conversion premium and yield values are percentages; delta
+uses the numeric units stated by the user.
 
 CREDIT RATING
 
@@ -34,7 +48,7 @@ Required structure:
 The credit-rating scale from strongest to weakest is:
 
 AAA, AA+, AA, AA-, A+, A, A-, BBB+, BBB, BBB-,
-BB+, BB, BB-, B+, B, B-, CCC+, CCC, CCC-, CC, C, D
+BB+, BB, BB-, B+, B, B-, CCC+, CCC, CCC-, CC, C, D, NR
 
 Rules:
 
@@ -43,6 +57,7 @@ Rules:
 - For multiple specified ratings, return exactly those ratings.
 - For a rating range, return every rating in the inclusive range.
 - Preserve rating order from strongest to weakest.
+- Use NR when the user asks for missing, unrated, not-rated, or N.A bonds.
 - If no valid rating is specified, set value to null.
 - Never guess a rating or select the closest rating.
 
@@ -220,6 +235,33 @@ Examples:
 }
 
 
+ISSUER
+
+Required structure:
+
+{
+  "field": "issuer",
+  "operator": "equals",
+  "value": "Acme Corporation"
+}
+
+Rules:
+
+- The value must be one issuer name as a string or null.
+- Preserve the issuer name supplied by the user.
+- Never return a list or infer additional issuers.
+- If no issuer is specified, set value to null.
+
+Example:
+
+"Bonds issued by Acme Corporation"
+
+{
+  "field": "issuer",
+  "operator": "equals",
+  "value": "Acme Corporation"
+}
+
 COMPLETE RESPONSE EXAMPLES
 
 "Show me BBB-rated bonds priced between 90 and 110 with coupon between 0.1 and 2.7"
@@ -247,6 +289,11 @@ COMPLETE RESPONSE EXAMPLES
         "minimum": 0.1,
         "maximum": 2.7
       }
+    },
+    {
+      "field": "issuer",
+      "operator": "equals",
+      "value": null
     }
   ]
 }
@@ -269,10 +316,24 @@ COMPLETE RESPONSE EXAMPLES
       "field": "coupon",
       "operator": "between",
       "value": null
+    },
+    {
+      "field": "issuer",
+      "operator": "equals",
+      "value": null
     }
   ]
 }
 """
+
+
+def build_system_prompt(current_date: date | None = None) -> str:
+    current_date = current_date or date.today()
+    return (
+        f"Current date: {current_date.isoformat()}.\n"
+        "Resolve relative dates such as 'within two years' using this date.\n\n"
+        f"{SYSTEM_PROMPT}"
+    )
 
 def interpret_request_with_ai(text: str) -> BondSearchQuery:
     response = client.responses.parse(
@@ -280,7 +341,7 @@ def interpret_request_with_ai(text: str) -> BondSearchQuery:
         input=[
             {
                 "role": "system",
-                "content": SYSTEM_PROMPT,
+                "content": build_system_prompt(),
             },
             {
                 "role": "user",

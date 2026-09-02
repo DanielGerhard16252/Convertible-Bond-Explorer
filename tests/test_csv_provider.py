@@ -51,9 +51,9 @@ def range_data_path(tmp_path):
     path = tmp_path / "bonds.csv"
     pd.DataFrame(
         [
-            {"Bond_Name": "Low", "Rating": "BBB", "Price": 90, "Coupon": 1.5},
-            {"Bond_Name": "Middle", "Rating": "A", "Price": 100, "Coupon": 2.5},
-            {"Bond_Name": "High", "Rating": "BBB", "Price": 110, "Coupon": 4.5},
+            {"Bond_Name": "Low", "Rating": "BBB", "Price": 90, "Coupon": 1.5, "Issuer": "Acme"},
+            {"Bond_Name": "Middle", "Rating": "A", "Price": 100, "Coupon": 2.5, "Issuer": "Example Inc"},
+            {"Bond_Name": "High", "Rating": "BBB", "Price": 110, "Coupon": 4.5, "Issuer": "Acme"},
         ]
     ).to_csv(path, index=False)
     return path
@@ -120,3 +120,40 @@ def test_null_numeric_range_returns_all_bonds(range_data_path, field):
     results = load_bond_data(query, range_data_path)
 
     assert len(results) == 3
+
+
+def test_filters_by_one_issuer_case_insensitively(range_data_path):
+    query = BondSearchQuery.model_validate(
+        {
+            "filters": [
+                {
+                    "field": "issuer",
+                    "operator": "equals",
+                    "value": " acme ",
+                }
+            ]
+        }
+    )
+
+    results = load_bond_data(query, range_data_path)
+
+    assert results["bond_name"].tolist() == ["Low", "High"]
+
+
+def test_combines_issuer_with_other_filters(range_data_path):
+    query = BondSearchQuery.model_validate(
+        {
+            "filters": [
+                {
+                    "field": "issuer",
+                    "operator": "equals",
+                    "value": "Acme",
+                },
+                range_filter("price", minimum=100),
+            ]
+        }
+    )
+
+    results = load_bond_data(query, range_data_path)
+
+    assert results["bond_name"].tolist() == ["High"]
