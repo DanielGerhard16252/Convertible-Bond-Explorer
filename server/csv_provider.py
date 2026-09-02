@@ -5,6 +5,7 @@ import pandas as pd
 from shared.models import (
     BondSearchQuery,
     SearchField,
+    PriceRange,
 )
 
 
@@ -49,14 +50,33 @@ def load_bond_data(
             continue
 
         if search_filter.field == SearchField.CREDIT_RATING:
-            rating = search_filter.value.value.upper()
+            ratings = [
+                rating.value.upper()
+                for rating in search_filter.value
+            ]
 
             results = results[
                 results["rating"]
                 .astype(str)
                 .str.strip()
                 .str.upper()
-                == rating
+                .isin(ratings)
             ]
+        elif search_filter.field == SearchField.PRICE:
+            price_range: PriceRange = search_filter.value
+
+            results["price"] = pd.to_numeric(
+                results["price"], errors="coerce")
+            
+            if price_range.minimum is not None:
+                results = results[
+                    results["price"] >= price_range.minimum
+                ]
+                
+            if price_range.maximum is not None:
+                results = results[
+                    results["price"] <= price_range.maximum
+                ]
+            
 
     return results.reset_index(drop=True)

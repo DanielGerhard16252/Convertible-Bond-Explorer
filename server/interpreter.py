@@ -29,8 +29,8 @@ def interpret_request(text: str) -> BondSearchQuery:
         filters=[
             SearchFilter(
                 field=SearchField.CREDIT_RATING,
-                operator=SearchOperator.EQUAL,
-                value=rating,
+                operator=SearchOperator.IN,
+                value=[rating],
             )
         ]
     )

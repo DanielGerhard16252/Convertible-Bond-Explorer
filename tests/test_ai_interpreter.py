@@ -10,7 +10,7 @@ def test_null_rating_is_valid():
             "filters": [
                 {
                     "field": "credit_rating",
-                    "operator": "equal",
+                    "operator": "in",
                     "value": None,
                 }
             ]
@@ -26,7 +26,7 @@ def test_null_rating_is_ignored_by_compiler():
             "filters": [
                 {
                     "field": "credit_rating",
-                    "operator": "equal",
+                    "operator": "in",
                     "value": None,
                 }
             ]
@@ -43,21 +43,21 @@ def test_live_openai_interpretation():
         "Show me BBB-rated convertible bonds"
     )
 
-    assert query.filters[0].value == "BBB"
+    assert query.filters[0].value == ["BBB"]
 
 def test_live_openai_interpretation():
     query = interpret_request_with_ai(
         "AAA Bonds"
     )
 
-    assert query.filters[0].value == "AAA"
+    assert query.filters[0].value == ["AAA"]
 
 def test_live_openai_interpretation():
     query = interpret_request_with_ai(
         "Bonds with credit C"
     )
 
-    assert query.filters[0].value == "C"
+    assert query.filters[0].value == ["C"]
 
 def test_live_openai_interpretation_returns_null_for_invalid_rating():
     query = interpret_request_with_ai(

@@ -5,10 +5,11 @@ from pydantic import BaseModel, Field
 
 class SearchField(str, Enum):
     CREDIT_RATING = "credit_rating"
-
+    PRICE = "price"
 
 class SearchOperator(str, Enum):
-    EQUAL = "equal"
+    IN = "in"
+    BETWEEN = "between"
 
 
 class CreditRating(str, Enum):
@@ -35,11 +36,14 @@ class CreditRating(str, Enum):
     C = "C"
     D = "D"
 
+class PriceRange(BaseModel):
+    minimum: float | None = None
+    maximum: float | None = None
 
 class SearchFilter(BaseModel):
     field: SearchField
     operator: SearchOperator
-    value: CreditRating | None = None
+    value: list[CreditRating] | PriceRange | None = None
 
 
 class BondSearchQuery(BaseModel):

@@ -13,8 +13,8 @@ def test_filters_csv_by_credit_rating():
             "filters": [
                 {
                     "field": "credit_rating",
-                    "operator": "equal",
-                    "value": "BBB",
+                    "operator": "in",
+                    "value": ["BBB"],
                 }
             ]
         }
@@ -31,7 +31,7 @@ def test_null_rating_returns_all_bonds():
             "filters": [
                 {
                     "field": "credit_rating",
-                    "operator": "equal",
+                    "operator": "in",
                     "value": None,
                 }
             ]

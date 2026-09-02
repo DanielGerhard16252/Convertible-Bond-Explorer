@@ -2,11 +2,14 @@ from shared.models import (
     BondSearchQuery,
     SearchField,
     SearchOperator,
+    PriceRange,
+    CreditRating,
 )
 
 
 BQL_FIELD_MAP = {
     SearchField.CREDIT_RATING: "BLOOMBERG_RATING_FIELD",
+    SearchField.PRICE: "BLOOMBERG_PRICE_FIELD",
 }
 
 
@@ -15,21 +18,54 @@ def format_bql_value(value: str) -> str:
     return f"'{escaped_value}'"
 
 
-def compile_filter(search_filter) -> str:
-    if search_filter.value is None:
+def compile_filter(search_filter) -> str | None:
+    if not search_filter.value:
         return None
-    if search_filter.operator != SearchOperator.EQUAL:
-        raise ValueError(
-            f"Unsupported operator: {search_filter.operator}"
-        )
 
     bql_field = BQL_FIELD_MAP[search_filter.field]
 
-    return (
-        f"{bql_field} == "
-        f"{format_bql_value(search_filter.value.value)}"
-    )
+    if search_filter.field == SearchField.CREDIT_RATING:
+        if search_filter.operator != SearchOperator.IN:
+            raise ValueError(
+                f"Invalid operator for credit_rating: {search_filter.operator}"
+            )
+    
+        formatted_ratings = ", ".join(
+            format_bql_value(rating.value)
+            for rating in search_filter.value
+        )
 
+        return f"{bql_field} IN [{formatted_ratings}]"
+    if search_filter.field == SearchField.PRICE:
+        if (
+            search_filter.operator
+            != SearchOperator.BETWEEN
+        ):
+            raise ValueError(
+                "Price requires the BETWEEN operator."
+            )
+
+        price_range: PriceRange = search_filter.value
+        conditions = []
+
+        if price_range.minimum is not None:
+            conditions.append(
+                f"{bql_field} >= {price_range.minimum:g}"
+            )
+
+        if price_range.maximum is not None:
+            conditions.append(
+                f"{bql_field} <= {price_range.maximum:g}"
+            )
+
+        if not conditions:
+            return None
+
+        return f"({' AND '.join(conditions)})"
+
+    raise ValueError(
+        f"Unsupported field: {search_filter.field}"
+    )
 
 def compile_query(query: BondSearchQuery) -> str:
     conditions = []
