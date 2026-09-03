@@ -1,3 +1,5 @@
+import pytest
+
 from server.bql_compiler import compile_query
 from server.interpreter import interpret_request
 from shared.models import BondSearchQuery
@@ -8,7 +10,7 @@ def test_compiles_required_convertible_corporate_universe():
 
     assert bql == (
         "GET(SECURITY_DES, BB_COMPOSITE, PX_LAST, CPN, MATURITY, CRNCY, "
-        "CNV_PREM, DELTA, YLD_YTM_MID, LONG_COMP_NAME) "
+        "DELTA, YIELD(YIELD_TYPE=YTM), LONG_COMP_NAME) "
         "FOR(filter(bondsuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
         "SRCH_ASSET_CLASS == 'Corporates' AND CONVERTIBLE == 'Y' AND "
@@ -65,14 +67,85 @@ def range_query(field, minimum=None, maximum=None):
 
 def test_compiles_new_numeric_filters():
     expected_fields = {
-        "conversion_premium": "CNV_PREM",
         "delta": "DELTA",
-        "yield_to_maturity": "YLD_YTM_MID",
+        "yield_to_maturity": "YIELD(YIELD_TYPE=YTM)",
     }
     for field, bql_field in expected_fields.items():
         bql = compile_query(range_query(field, 1.5, 5.5))
         assert f"{bql_field} >= 1.5" in bql
         assert f"{bql_field} <= 5.5" in bql
+
+
+def test_omits_unsupported_conversion_premium_from_bql():
+    bql = compile_query(range_query("conversion_premium", 10, 30))
+
+    assert "CNV_PREM" not in bql
+
+
+def test_compiles_country_filter():
+    query = BondSearchQuery.model_validate({"filters": [
+        {"field": "country", "operator": "equals", "value": "fr"},
+    ]})
+
+    bql = compile_query(query)
+
+    assert "CNTRY_OF_RISK == 'FR'" in bql
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("convertible", "CONVERTIBLE == 'Y'"),
+        ("high_yield", "BB_COMPOSITE IN ['BB+'"),
+        (
+            "convertible_or_high_yield",
+            "(CONVERTIBLE == 'Y' OR BB_COMPOSITE IN ['BB+'",
+        ),
+    ],
+)
+def test_compiles_bond_universe(value, expected):
+    query = BondSearchQuery.model_validate({"filters": [{
+        "field": "bond_universe",
+        "operator": "equals",
+        "value": value,
+    }]})
+
+    assert expected in compile_query(query)
+
+
+def test_compiles_amount_outstanding_in_usd_millions():
+    bql = compile_query(range_query("amount_outstanding", 75, 250))
+
+    assert "AMT_OUTSTANDING >= 75000000" in bql
+    assert "AMT_OUTSTANDING <= 250000000" in bql
+
+
+def test_defaults_amount_outstanding_to_fifty_million():
+    bql = compile_query(BondSearchQuery(filters=[]))
+
+    assert "AMT_OUTSTANDING >= 50000000" in bql
+
+
+def test_merges_high_yield_universe_with_selected_ratings():
+    query = BondSearchQuery.model_validate({"filters": [
+        {
+            "field": "bond_universe",
+            "operator": "equals",
+            "value": "high_yield",
+        },
+        {
+            "field": "credit_rating",
+            "operator": "in",
+            "value": ["A", "BBB", "BB+", "BB", "B"],
+        },
+    ]})
+
+    bql = compile_query(query)
+
+    assert bql.count("BB_COMPOSITE IN") == 1
+    assert "BB_COMPOSITE IN ['BB+', 'BB', 'B']" in bql
+    assert "'A'" not in bql
+    assert "'BBB'" not in bql
 
 
 def test_compiles_maturity_and_currency_filters():

@@ -14,7 +14,7 @@ client = OpenAI()
 SYSTEM_PROMPT = """
 Translate the user's convertible-bond search request into the supplied schema.
 
-You must always return exactly nine filters:
+You must always return exactly twelve filters:
 
 1. credit_rating
 2. price
@@ -25,6 +25,9 @@ You must always return exactly nine filters:
 7. conversion_premium
 8. delta
 9. yield_to_maturity
+10. country
+11. bond_universe
+12. amount_outstanding
 
 Do not add any other filters.
 
@@ -34,8 +37,15 @@ For conversion_premium, delta, and yield_to_maturity use operator "between"
 and an object with numeric minimum and maximum values. Use null when a filter
 was not requested. Conversion premium and yield values are percentages; delta
 uses the numeric units stated by the user.
+For country use operator "equals" and its uppercase ISO 3166-1 alpha-2 code.
+For bond_universe use operator "equals" and one of "convertible", "high_yield",
+or "convertible_or_high_yield"; default to "convertible" when unspecified.
+For amount_outstanding use operator "between" and values in USD millions;
+default the minimum to 50 when unspecified.
 
 CREDIT RATING
+
+If they say single B they mean B, B+ and B- are all valid, similar with double A and so on.
 
 Required structure:
 

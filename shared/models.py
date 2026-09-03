@@ -14,6 +14,9 @@ class SearchField(str, Enum):
     CONVERSION_PREMIUM = "conversion_premium"
     DELTA = "delta"
     YIELD_TO_MATURITY = "yield_to_maturity"
+    COUNTRY = "country"
+    BOND_UNIVERSE = "bond_universe"
+    AMOUNT_OUTSTANDING = "amount_outstanding"
 
 class SearchOperator(str, Enum):
     IN = "in"

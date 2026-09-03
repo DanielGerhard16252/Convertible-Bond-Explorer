@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import date
 
 import pandas as pd
 import pytest
@@ -157,3 +158,96 @@ def test_combines_issuer_with_other_filters(range_data_path):
     results = load_bond_data(query, range_data_path)
 
     assert results["bond_name"].tolist() == ["High"]
+
+
+@pytest.fixture
+def extended_data_path(tmp_path):
+    path = tmp_path / "extended_bonds.csv"
+    pd.DataFrame(
+        [
+            {
+                "SECURITY_DES": "First",
+                "BB_COMPOSITE": "BBB",
+                "PX_LAST": 98,
+                "CPN": 2,
+                "LONG_COMP_NAME": "Acme",
+                "MATURITY": "2028-06-15",
+                "CRNCY": "USD",
+                "CNV_PREM": 20,
+                "DELTA": 0.4,
+                "YLD_YTM_MID": 3.5,
+            },
+            {
+                "SECURITY_DES": "Second",
+                "BB_COMPOSITE": "A",
+                "PX_LAST": 102,
+                "CPN": 3,
+                "LONG_COMP_NAME": "Example Inc",
+                "MATURITY": "2031-01-20",
+                "CRNCY": "EUR",
+                "CNV_PREM": 35,
+                "DELTA": 0.7,
+                "YLD_YTM_MID": 2.0,
+            },
+        ]
+    ).to_csv(path, index=False)
+    return path
+
+
+@pytest.mark.parametrize(
+    ("field", "minimum", "maximum", "expected"),
+    [
+        ("conversion_premium", 25, None, ["Second"]),
+        ("delta", None, 0.5, ["First"]),
+        ("yield_to_maturity", 3, 4, ["First"]),
+    ],
+)
+def test_filters_analytics_ranges(
+    extended_data_path, field, minimum, maximum, expected
+):
+    query = BondSearchQuery.model_validate(
+        {"filters": [range_filter(field, minimum, maximum)]}
+    )
+
+    results = load_bond_data(query, extended_data_path)
+
+    assert results["bond_name"].tolist() == expected
+
+
+def test_filters_maturity_range(extended_data_path):
+    query = BondSearchQuery.model_validate(
+        {
+            "filters": [
+                {
+                    "field": "maturity",
+                    "operator": "between",
+                    "value": {
+                        "minimum": date(2028, 1, 1),
+                        "maximum": date(2029, 1, 1),
+                    },
+                }
+            ]
+        }
+    )
+
+    results = load_bond_data(query, extended_data_path)
+
+    assert results["bond_name"].tolist() == ["First"]
+
+
+def test_filters_currency_case_insensitively(extended_data_path):
+    query = BondSearchQuery.model_validate(
+        {
+            "filters": [
+                {
+                    "field": "currency",
+                    "operator": "equals",
+                    "value": " eur ",
+                }
+            ]
+        }
+    )
+
+    results = load_bond_data(query, extended_data_path)
+
+    assert results["bond_name"].tolist() == ["Second"]
