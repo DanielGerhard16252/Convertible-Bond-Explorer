@@ -70,3 +70,4 @@ class SearchFilter(BaseModel):
 
 class BondSearchQuery(BaseModel):
     filters: list[SearchFilter]
+    post_analysis: str | None = None

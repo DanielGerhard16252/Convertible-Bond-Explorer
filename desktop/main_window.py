@@ -30,6 +30,7 @@ from datetime import date, datetime
 from numbers import Real
 
 from server.ai_interpreter import interpret_request_with_ai
+from server.ai_analysis import run_post_analysis
 from server.bql_compiler import compile_query
 from server.csv_provider import load_bond_data
 
@@ -250,9 +251,14 @@ class SortableTableItem(QTableWidgetItem):
 
 
 class ResultsWindow(QMainWindow):
-    def __init__(self, dataframe: pd.DataFrame) -> None:
+    def __init__(
+        self,
+        dataframe: pd.DataFrame,
+        window_title: str = "Convertible Bond Search Results",
+        heading: str = "Search results",
+    ) -> None:
         super().__init__()
-        self.setWindowTitle("Convertible Bond Search Results")
+        self.setWindowTitle(window_title)
         self.resize(1200, 700)
         self.setStyleSheet(APP_STYLESHEET)
 
@@ -261,7 +267,7 @@ class ResultsWindow(QMainWindow):
         layout.setContentsMargins(22, 20, 22, 20)
         layout.setSpacing(12)
 
-        title = QLabel("Search results")
+        title = QLabel(heading)
         title.setObjectName("pageTitle")
         count = len(dataframe)
         summary = QLabel(
@@ -326,7 +332,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.results = pd.DataFrame()
         self.results_window: ResultsWindow | None = None
+        self.analysis_window: ResultsWindow | None = None
         self.bql_query = ""
+        self.post_analysis_request: str | None = None
         self.setWindowTitle("Convertible Bond Explorer")
         self.resize(1180, 800)
         self.setMinimumSize(900, 650)
@@ -355,6 +363,21 @@ class MainWindow(QMainWindow):
             "Generated for Bloomberg inspection; results currently come from CSV."
         )
         self.bql.setStyleSheet('font-family: Consolas, "Courier New";')
+
+        self.post_analysis = QPlainTextEdit()
+        self.post_analysis.setMaximumHeight(58)
+        self.post_analysis.setPlaceholderText(
+            "Enter post-analysis instructions or use AI assisted search"
+        )
+        self.post_analysis.setToolTip(
+            "Edit the analysis instructions before running them on filtered results."
+        )
+        self.post_analysis.textChanged.connect(
+            self.post_analysis_changed
+        )
+        self.run_analysis_button = QPushButton("Run analysis")
+        self.run_analysis_button.setEnabled(False)
+        self.run_analysis_button.clicked.connect(self.run_analysis)
 
         self.results_table = QTableWidget()
         configure_results_table(self.results_table)
@@ -585,8 +608,21 @@ class MainWindow(QMainWindow):
         submit_row.addWidget(self.submit_button)
         layout.addLayout(submit_row)
 
-        layout.addWidget(self.section_label("Generated BQL"))
-        layout.addWidget(self.bql)
+        previews = QGridLayout()
+        previews.setSpacing(8)
+        previews.addWidget(self.section_label("Generated BQL"), 0, 0)
+        previews.addWidget(self.section_label("Post-analysis prompt"), 0, 1)
+        previews.addWidget(self.bql, 1, 0)
+        previews.addWidget(self.post_analysis, 1, 1)
+        previews.addWidget(
+            self.run_analysis_button,
+            2,
+            1,
+            alignment=Qt.AlignmentFlag.AlignRight,
+        )
+        previews.setColumnStretch(0, 1)
+        previews.setColumnStretch(1, 1)
+        layout.addLayout(previews)
 
         results_header = QHBoxLayout()
         results_header.addWidget(self.section_label("Search results"))
@@ -803,6 +839,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid range", "A minimum exceeds its maximum.")
             return
         query = BondSearchQuery(
+            post_analysis=self.post_analysis_request,
             filters=[
                 SearchFilter(
                     field=SearchField.CREDIT_RATING,
@@ -911,12 +948,54 @@ class MainWindow(QMainWindow):
             f"{count:,} {'result' if count == 1 else 'results'}"
         )
         self.open_results_button.setEnabled(True)
+        self.update_analysis_button()
 
     def open_results_window(self) -> None:
         self.results_window = ResultsWindow(self.results)
         self.results_window.show()
         self.results_window.raise_()
         self.results_window.activateWindow()
+
+    def update_analysis_button(self) -> None:
+        self.run_analysis_button.setEnabled(
+            bool(self.post_analysis_request) and not self.results.empty
+        )
+
+    def post_analysis_changed(self) -> None:
+        self.post_analysis_request = (
+            self.post_analysis.toPlainText().strip() or None
+        )
+        self.update_analysis_button()
+
+    def run_analysis(self) -> None:
+        if not self.post_analysis_request or self.results.empty:
+            return
+
+        self.run_analysis_button.setEnabled(False)
+        self.run_analysis_button.setText("Analysing...")
+        try:
+            analysis = run_post_analysis(
+                self.post_analysis_request,
+                self.results,
+                self.bql_query,
+            )
+            self.analysis_window = ResultsWindow(
+                analysis,
+                window_title="AI Post Analysis",
+                heading="AI post analysis",
+            )
+            self.analysis_window.show()
+            self.analysis_window.raise_()
+            self.analysis_window.activateWindow()
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Analysis failed",
+                str(error),
+            )
+        finally:
+            self.run_analysis_button.setText("Run analysis")
+            self.update_analysis_button()
 
     def export_to_csv(self) -> None:
         if self.results.empty:
@@ -961,6 +1040,10 @@ class MainWindow(QMainWindow):
         self,
         query: BondSearchQuery,
     ) -> None:
+        self.post_analysis_request = query.post_analysis
+        self.post_analysis.setPlainText(query.post_analysis or "")
+        self.update_analysis_button()
+
         # Clear the previous selection.
         for item in self.rating_items.values():
             item.setCheckState(Qt.CheckState.Unchecked)

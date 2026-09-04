@@ -48,6 +48,24 @@ def test_system_prompt_includes_current_date():
     assert "Resolve relative dates" in prompt
 
 
+def test_system_prompt_extracts_but_does_not_perform_post_analysis():
+    prompt = build_system_prompt(date(2026, 9, 2))
+
+    assert 'top-level "post_analysis" field' in prompt
+    assert "never calculate" in prompt
+
+
+def test_query_accepts_post_analysis_instructions():
+    query = BondSearchQuery.model_validate(
+        {
+            "filters": [],
+            "post_analysis": "Rank the results by yield.",
+        }
+    )
+
+    assert query.post_analysis == "Rank the results by yield."
+
+
 def test_live_openai_interpretation():
     query = interpret_request_with_ai(
         "Show me BBB-rated convertible bonds"

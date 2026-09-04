@@ -31,6 +31,13 @@ You must always return exactly twelve filters:
 
 Do not add any other filters.
 
+Also extract any analysis the user asks to perform after retrieving the data
+into the top-level "post_analysis" field. Preserve all requested analysis as
+concise instructions, for example "Rank the results by yield and summarize the
+top five issuers." Set post_analysis to null when no analysis is requested.
+Only extract the request: never calculate, answer, summarize, rank, compare, or
+otherwise perform the analysis.
+
 For maturity use operator "between" and an object with ISO-8601 minimum and
 maximum dates. For currency use operator "equals" and a three-letter ISO code.
 For conversion_premium, delta, and yield_to_maturity use operator "between"
@@ -45,7 +52,7 @@ default the minimum to 50 when unspecified.
 
 CREDIT RATING
 
-If they say single B they mean B, B+ and B- are all valid, similar with double A and so on.
+If request specifies a rating as single, double or triple letter include all valid ratings that match the request. For example, "single A" includes A+, A, and A-; "double A" includes AA+, AA, and AA-; "triple B" includes BBB, BBB+, BBB, and BBB-. 
 
 Required structure:
 
@@ -277,6 +284,7 @@ COMPLETE RESPONSE EXAMPLES
 "Show me BBB-rated bonds priced between 90 and 110 with coupon between 0.1 and 2.7"
 
 {
+  "post_analysis": null,
   "filters": [
     {
       "field": "credit_rating",
@@ -311,6 +319,7 @@ COMPLETE RESPONSE EXAMPLES
 "Show me all convertible bonds"
 
 {
+  "post_analysis": null,
   "filters": [
     {
       "field": "credit_rating",
