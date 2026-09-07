@@ -1,50 +1,88 @@
+from types import SimpleNamespace
+
 import pandas as pd
+import pytest
 
-from server.ai_analysis import (
-    analysis_result_to_dataframe,
-    build_analysis_instructions,
-    execute_analysis_code,
-)
+import server.ai_analysis as ai_analysis
+from server.ai_analysis import build_analysis_instructions, run_post_analysis
 
 
-def test_executes_analysis_against_a_dataset_copy():
-    dataset = pd.DataFrame({"price": [5, 40, 10]})
-
-    result = execute_analysis_code(
-        "result = dataset.sort_values('price')",
-        dataset,
-    )
-
-    assert result["price"].tolist() == [5, 10, 40]
-    assert dataset["price"].tolist() == [5, 40, 10]
-
-
-def test_converts_scalar_dictionary_to_one_table_row():
-    dataframe = analysis_result_to_dataframe(
-        {"metric": "Average price", "value": 95.5}
-    )
-
-    assert dataframe.to_dict("records") == [
-        {"metric": "Average price", "value": 95.5}
-    ]
-
-
-def test_converts_series_to_a_table():
-    dataframe = analysis_result_to_dataframe(
-        pd.Series({"USD": 3, "EUR": 2})
-    )
-
-    assert dataframe.columns.tolist() == ["index", "value"]
-    assert dataframe["value"].tolist() == [3, 2]
-
-
-def test_analysis_instructions_include_bql_and_dataset_schema():
+def test_analysis_instructions_include_bql_and_dataset_records():
     dataset = pd.DataFrame({"price": [100.0], "rating": ["BBB"]})
     bql = "GET(PX_LAST) FOR('Example Corp')"
 
     instructions = build_analysis_instructions(dataset, bql)
 
     assert bql in instructions
-    assert "- price: float64" in instructions
-    assert f"- rating: {dataset['rating'].dtype}" in instructions
+    assert "'price': 100.0" in instructions
+    assert "'rating': 'BBB'" in instructions
     assert "dataset` is authoritative" in instructions
+
+
+def test_analysis_instructions_replace_nan_with_none():
+    instructions = build_analysis_instructions(
+        pd.DataFrame({"price": [float("nan")]}),
+        "GET(PX_LAST) FOR(BONDS)",
+    )
+
+    assert "'price': None" in instructions
+
+
+def test_run_post_analysis_returns_response_text(monkeypatch):
+    submitted = {}
+
+    class Responses:
+        def create(self, **kwargs):
+            submitted.update(kwargs)
+            return SimpleNamespace(output_text="Bond A has the highest yield.")
+
+    monkeypatch.setattr(
+        ai_analysis,
+        "client",
+        SimpleNamespace(responses=Responses()),
+    )
+    dataset = pd.DataFrame({"bond": ["Bond A"], "yield": [5.2]})
+
+    result = run_post_analysis(
+        "Which bond has the highest yield?",
+        dataset,
+        "GET(SECURITY_DES) FOR(BONDS)",
+    )
+
+    assert result == "Bond A has the highest yield."
+    assert submitted["input"] == "Which bond has the highest yield?"
+    assert submitted["tools"] == [{"type": "web_search"}]
+    assert "'bond': 'Bond A'" in submitted["instructions"]
+
+
+@pytest.mark.parametrize(
+    ("query", "dataset", "bql_query", "message"),
+    [
+        (
+            " ",
+            pd.DataFrame({"bond": ["Bond A"]}),
+            "GET(ID) FOR(BONDS)",
+            "Post-analysis instructions cannot be empty",
+        ),
+        (
+            "Summarise",
+            pd.DataFrame(),
+            "GET(ID) FOR(BONDS)",
+            "There are no filtered results to analyse",
+        ),
+        (
+            "Summarise",
+            pd.DataFrame({"bond": ["Bond A"]}),
+            " ",
+            "Generated BQL context cannot be empty",
+        ),
+    ],
+)
+def test_run_post_analysis_validates_inputs(
+    query,
+    dataset,
+    bql_query,
+    message,
+):
+    with pytest.raises(ValueError, match=message):
+        run_post_analysis(query, dataset, bql_query)

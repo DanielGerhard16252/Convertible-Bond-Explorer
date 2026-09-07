@@ -9,11 +9,12 @@ def test_compiles_required_convertible_corporate_universe():
     bql = compile_query(BondSearchQuery(filters=[]))
 
     assert bql == (
-        "GET(SECURITY_DES, BB_COMPOSITE, PX_LAST, CPN, MATURITY, CRNCY, "
+        "GET(SECURITY_DES, CV_COMMON_TICKER_EXCH, BB_COMPOSITE, "
+        "CV_CNVS_PX, PX_LAST, CPN, MATURITY, CRNCY, "
         "DELTA, YIELD(YIELD_TYPE=YTM), LONG_COMP_NAME) "
         "FOR(filter(bondsuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
-        "SRCH_ASSET_CLASS == 'Corporates' AND CONVERTIBLE == 'Y' AND "
+        "(CONVERTIBLE == 'Y' AND SRCH_ASSET_CLASS == 'Corporates') AND "
         "AMT_OUTSTANDING >= 50000000))"
     )
 
@@ -67,7 +68,6 @@ def range_query(field, minimum=None, maximum=None):
 
 def test_compiles_new_numeric_filters():
     expected_fields = {
-        "delta": "DELTA",
         "yield_to_maturity": "YIELD(YIELD_TYPE=YTM)",
     }
     for field, bql_field in expected_fields.items():
@@ -89,7 +89,17 @@ def test_compiles_country_filter():
 
     bql = compile_query(query)
 
-    assert "CNTRY_OF_RISK == 'FR'" in bql
+    assert "CNTRY_OF_RISK IN ['FR']" in bql
+
+
+def test_compiles_multiple_countries():
+    query = BondSearchQuery.model_validate({"filters": [{
+        "field": "country",
+        "operator": "in",
+        "value": ["fr", "de", "gb"],
+    }]})
+
+    assert "CNTRY_OF_RISK IN ['FR', 'DE', 'GB']" in compile_query(query)
 
 
 @pytest.mark.parametrize(
@@ -97,10 +107,6 @@ def test_compiles_country_filter():
     [
         ("convertible", "CONVERTIBLE == 'Y'"),
         ("high_yield", "BB_COMPOSITE IN ['BB+'"),
-        (
-            "convertible_or_high_yield",
-            "(CONVERTIBLE == 'Y' OR BB_COMPOSITE IN ['BB+'",
-        ),
     ],
 )
 def test_compiles_bond_universe(value, expected):
@@ -111,6 +117,28 @@ def test_compiles_bond_universe(value, expected):
     }]})
 
     assert expected in compile_query(query)
+
+
+def test_scopes_asset_classes_to_high_yield_universe():
+    query = BondSearchQuery.model_validate({"filters": [
+        {
+            "field": "bond_universe",
+            "operator": "equals",
+            "value": "high_yield",
+        },
+        {
+            "field": "asset_classes",
+            "operator": "in",
+            "value": ["Governments", "Municipals"],
+        },
+    ]})
+
+    bql = compile_query(query)
+
+    assert "CONVERTIBLE == 'Y'" not in bql
+    assert (
+        "SRCH_ASSET_CLASS IN ['Governments', 'Municipals']" in bql
+    )
 
 
 def test_compiles_amount_outstanding_in_usd_millions():

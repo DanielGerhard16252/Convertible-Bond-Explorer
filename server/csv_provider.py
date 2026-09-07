@@ -25,19 +25,21 @@ BQL_COLUMN_MAP = {
     "cnv_prem": "conversion_premium",
     "delta": "delta",
     "yld_ytm_mid": "yield_to_maturity",
+    "cntry_of_risk": "country",
+    "amt_outstanding": "amount_outstanding",
+    "convertible": "convertible",
+    "srch_asset_class": "asset_class",
 }
 
 NUMERIC_FIELDS = {
     SearchField.PRICE,
     SearchField.COUPON,
     SearchField.CONVERSION_PREMIUM,
-    SearchField.DELTA,
     SearchField.YIELD_TO_MATURITY,
 }
-BQL_ONLY_FIELDS = {
-    SearchField.COUNTRY,
-    SearchField.BOND_UNIVERSE,
-    SearchField.AMOUNT_OUTSTANDING,
+HIGH_YIELD_RATINGS = {
+    "BB+", "BB", "BB-", "B+", "B", "B-",
+    "CCC+", "CCC", "CCC-", "CC", "C", "D",
 }
 
 
@@ -46,21 +48,21 @@ def require_column(dataframe: pd.DataFrame, column: str) -> None:
         raise ValueError(f"CSV is missing required column: {column}")
 
 
+def _read_bond_data(data_path: Path) -> pd.DataFrame:
+    dataframe = pd.read_csv(data_path)
+    dataframe.columns = [
+        BQL_COLUMN_MAP.get(column.strip().lower().replace(" ", "_"),
+                           column.strip().lower().replace(" ", "_"))
+        for column in dataframe.columns
+    ]
+    return dataframe
+
+
 def load_bond_data(
     query: BondSearchQuery,
     data_path: Path = DEFAULT_DATA_PATH,
 ) -> pd.DataFrame:
-    dataframe = pd.read_csv(data_path)
-
-    # Convert headings such as "bond name" to "bond_name".
-    normalized_columns = [
-        column.strip().lower().replace(" ", "_")
-        for column in dataframe.columns
-    ]
-    dataframe.columns = [
-        BQL_COLUMN_MAP.get(column, column)
-        for column in normalized_columns
-    ]
+    dataframe = _read_bond_data(data_path)
 
     required_columns = {
         "bond_name",
@@ -78,11 +80,58 @@ def load_bond_data(
         )
 
     results = dataframe.copy()
+    universe_filter = next(
+        (item for item in query.filters
+         if item.field == SearchField.BOND_UNIVERSE and item.value),
+        None,
+    )
+    asset_class_filter = next(
+        (item for item in query.filters
+         if item.field == SearchField.ASSET_CLASSES and item.value),
+        None,
+    )
+    if universe_filter is not None:
+        universe = str(universe_filter.value).strip().casefold()
+        asset_classes = (
+            {str(value).strip().casefold()
+             for value in asset_class_filter.value}
+            if asset_class_filter is not None
+            else {"corporates"}
+        )
+        require_column(results, "asset_class")
+        normalized_assets = (
+            results["asset_class"].astype(str).str.strip().str.casefold()
+        )
+        normalized_ratings = (
+            results["rating"].astype("string").str.strip().str.upper()
+        )
+        high_yield = (
+            normalized_ratings.isin(HIGH_YIELD_RATINGS)
+            & normalized_assets.isin(asset_classes)
+        )
+        require_column(results, "convertible")
+        convertible = (
+            results["convertible"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .isin({"Y", "YES", "TRUE", "1"})
+            & normalized_assets.eq("corporates")
+        )
+        if universe == "high_yield":
+            results = results[high_yield]
+        elif universe == "convertible":
+            results = results[convertible]
+        else:
+            raise ValueError(f"Unsupported bond universe: {universe}")
 
     for search_filter in query.filters:
         if search_filter.value is None:
             continue
-        if search_filter.field in BQL_ONLY_FIELDS:
+        if search_filter.field in {
+            SearchField.BOND_UNIVERSE,
+            SearchField.ASSET_CLASSES,
+        }:
             continue
 
         if search_filter.field == SearchField.CREDIT_RATING:
@@ -138,6 +187,39 @@ def load_bond_data(
                 results["currency"].astype(str).str.strip().str.upper()
                 == currency
             ]
+        elif search_filter.field == SearchField.COUNTRY:
+            require_column(results, "country")
+            countries = (
+                search_filter.value
+                if isinstance(search_filter.value, list)
+                else [search_filter.value]
+            )
+            normalized_countries = {
+                str(country).strip().upper() for country in countries
+            }
+            results = results[
+                results["country"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .isin(normalized_countries)
+            ]
+        elif search_filter.field == SearchField.AMOUNT_OUTSTANDING:
+            require_column(results, "amount_outstanding")
+            value_range = search_filter.value
+            results["amount_outstanding"] = pd.to_numeric(
+                results["amount_outstanding"], errors="coerce"
+            )
+            if value_range.minimum is not None:
+                results = results[
+                    results["amount_outstanding"]
+                    >= value_range.minimum * 1_000_000
+                ]
+            if value_range.maximum is not None:
+                results = results[
+                    results["amount_outstanding"]
+                    <= value_range.maximum * 1_000_000
+                ]
         elif search_filter.field == SearchField.MATURITY:
             require_column(results, "maturity")
             date_range = search_filter.value

@@ -167,7 +167,7 @@ def extended_data_path(tmp_path):
         [
             {
                 "SECURITY_DES": "First",
-                "BB_COMPOSITE": "BBB",
+                "BB_COMPOSITE": "BB",
                 "PX_LAST": 98,
                 "CPN": 2,
                 "LONG_COMP_NAME": "Acme",
@@ -176,6 +176,10 @@ def extended_data_path(tmp_path):
                 "CNV_PREM": 20,
                 "DELTA": 0.4,
                 "YLD_YTM_MID": 3.5,
+                "CNTRY_OF_RISK": "US",
+                "AMT_OUTSTANDING": 40_000_000,
+                "CONVERTIBLE": "Y",
+                "SRCH_ASSET_CLASS": "Corporates",
             },
             {
                 "SECURITY_DES": "Second",
@@ -188,6 +192,10 @@ def extended_data_path(tmp_path):
                 "CNV_PREM": 35,
                 "DELTA": 0.7,
                 "YLD_YTM_MID": 2.0,
+                "CNTRY_OF_RISK": "FR",
+                "AMT_OUTSTANDING": 120_000_000,
+                "CONVERTIBLE": "N",
+                "SRCH_ASSET_CLASS": "Corporates",
             },
         ]
     ).to_csv(path, index=False)
@@ -198,7 +206,6 @@ def extended_data_path(tmp_path):
     ("field", "minimum", "maximum", "expected"),
     [
         ("conversion_premium", 25, None, ["Second"]),
-        ("delta", None, 0.5, ["First"]),
         ("yield_to_maturity", 3, 4, ["First"]),
     ],
 )
@@ -251,3 +258,67 @@ def test_filters_currency_case_insensitively(extended_data_path):
     results = load_bond_data(query, extended_data_path)
 
     assert results["bond_name"].tolist() == ["Second"]
+
+
+def test_filters_country_and_amount_outstanding(extended_data_path):
+    query = BondSearchQuery.model_validate({"filters": [
+        {"field": "country", "operator": "equals", "value": "FR"},
+        range_filter("amount_outstanding", 100, 150),
+    ]})
+
+    results = load_bond_data(query, extended_data_path)
+
+    assert results["bond_name"].tolist() == ["Second"]
+
+
+def test_filters_multiple_countries(extended_data_path):
+    query = BondSearchQuery.model_validate({"filters": [{
+        "field": "country",
+        "operator": "in",
+        "value": ["US", "FR"],
+    }]})
+
+    results = load_bond_data(query, extended_data_path)
+
+    assert results["bond_name"].tolist() == ["First", "Second"]
+
+
+@pytest.mark.parametrize(
+    ("universe", "expected"),
+    [
+        ("convertible", ["First"]),
+        ("high_yield", ["First"]),
+    ],
+)
+def test_filters_bond_universe(extended_data_path, universe, expected):
+    query = BondSearchQuery.model_validate({"filters": [{
+        "field": "bond_universe",
+        "operator": "equals",
+        "value": universe,
+    }]})
+
+    results = load_bond_data(query, extended_data_path)
+
+    assert results["bond_name"].tolist() == expected
+
+
+def test_high_yield_universe_uses_selected_assets(tmp_path):
+    path = tmp_path / "universe.csv"
+    pd.DataFrame([
+        {"Bond_Name": "Convertible", "Rating": "A", "Price": 100,
+         "SRCH_ASSET_CLASS": "Corporates", "CONVERTIBLE": "Y"},
+        {"Bond_Name": "HY Government", "Rating": "B", "Price": 100,
+         "SRCH_ASSET_CLASS": "Governments", "CONVERTIBLE": "N"},
+        {"Bond_Name": "HY Corporate", "Rating": "BB", "Price": 100,
+         "SRCH_ASSET_CLASS": "Corporates", "CONVERTIBLE": "N"},
+    ]).to_csv(path, index=False)
+    query = BondSearchQuery.model_validate({"filters": [
+        {"field": "bond_universe", "operator": "equals",
+         "value": "high_yield"},
+        {"field": "asset_classes", "operator": "in",
+         "value": ["Governments"]},
+    ]})
+
+    results = load_bond_data(query, path)
+
+    assert results["bond_name"].tolist() == ["HY Government"]

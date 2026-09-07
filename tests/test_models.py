@@ -147,3 +147,38 @@ def test_rejects_multiple_issuers():
             }
         )
 
+
+def test_converts_amount_outstanding_text_to_minimum_range():
+    query = BondSearchQuery.model_validate({"filters": [{
+        "field": "amount_outstanding",
+        "operator": "between",
+        "value": "50MM",
+    }]})
+
+    value = query.filters[0].value
+    assert isinstance(value, PriceRange)
+    assert value.minimum == 50
+    assert value.maximum is None
+
+
+def test_decodes_json_string_amount_outstanding_range():
+    query = BondSearchQuery.model_validate({"filters": [{
+        "field": "amount_outstanding",
+        "operator": "between",
+        "value": '{"minimum": 50, "maximum": null}',
+    }]})
+
+    value = query.filters[0].value
+    assert isinstance(value, PriceRange)
+    assert value.minimum == 50
+    assert value.maximum is None
+
+
+def test_rejects_combined_bond_universe():
+    with pytest.raises(ValidationError, match="must be convertible or high_yield"):
+        BondSearchQuery.model_validate({"filters": [{
+            "field": "bond_universe",
+            "operator": "equals",
+            "value": "convertible_or_high_yield",
+        }]})
+

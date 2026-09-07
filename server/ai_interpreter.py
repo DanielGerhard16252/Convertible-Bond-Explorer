@@ -23,11 +23,11 @@ You must always return exactly twelve filters:
 5. maturity
 6. currency
 7. conversion_premium
-8. delta
-9. yield_to_maturity
-10. country
-11. bond_universe
-12. amount_outstanding
+8. yield_to_maturity
+9. country
+10. bond_universe
+11. amount_outstanding
+12. asset_classes
 
 Do not add any other filters.
 
@@ -40,15 +40,22 @@ otherwise perform the analysis.
 
 For maturity use operator "between" and an object with ISO-8601 minimum and
 maximum dates. For currency use operator "equals" and a three-letter ISO code.
-For conversion_premium, delta, and yield_to_maturity use operator "between"
+For conversion_premium and yield_to_maturity use operator "between"
 and an object with numeric minimum and maximum values. Use null when a filter
-was not requested. Conversion premium and yield values are percentages; delta
-uses the numeric units stated by the user.
-For country use operator "equals" and its uppercase ISO 3166-1 alpha-2 code.
-For bond_universe use operator "equals" and one of "convertible", "high_yield",
-or "convertible_or_high_yield"; default to "convertible" when unspecified.
+was not requested. Conversion premium and yield values are percentages.
+For country use operator "in" and a list of uppercase ISO 3166-1 alpha-2
+codes, even when only one country is requested. If the user asks for Europe,
+include all of these relevant European country codes:
+AL, AD, AT, BY, BE, BA, BG, HR, CY, CZ, DK, EE, FI, FR, DE, GR, HU, IS,
+IE, IT, LV, LI, LT, LU, MT, MD, MC, ME, NL, MK, NO, PL, PT, RO, RU, SM,
+RS, SK, SI, ES, SE, CH, UA, GB, VA.
+For bond_universe use operator "equals" and either "convertible" or
+"high_yield"; default to "convertible" when unspecified. Never select both.
 For amount_outstanding use operator "between" and values in USD millions;
 default the minimum to 50 when unspecified.
+For asset_classes use operator "in" and a list containing any of
+"Corporates", "Governments", and "Municipals". This selection applies only
+to the High Yield branch. Default to ["Corporates"] when unspecified.
 
 CREDIT RATING
 

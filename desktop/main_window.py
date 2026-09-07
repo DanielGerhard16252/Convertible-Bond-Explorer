@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (
     QComboBox,
+    QCheckBox,
     QAbstractItemView,
     QFrame,
     QGridLayout,
@@ -32,8 +33,8 @@ from numbers import Real
 from server.ai_interpreter import interpret_request_with_ai
 from server.ai_analysis import run_post_analysis
 from server.bql_compiler import compile_query
+from server.benchmarks import get_benchmark_options
 from server.csv_provider import load_bond_data
-
 from shared.models import (
     BondSearchQuery,
     CouponRange,
@@ -95,6 +96,17 @@ QGroupBox::title {
     left: 11px;
     padding: 0 5px;
     color: #334e75;
+    background-color: #f3f6fb;
+}
+
+QGroupBox:disabled {
+    background-color: #e5e9ef;
+    border-color: #cbd2dc;
+    color: #8b96a8;
+}
+
+QGroupBox::title:disabled {
+    color: #8b96a8;
     background-color: #f3f6fb;
 }
 
@@ -191,6 +203,14 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 }
 """
 
+EUROPE_COUNTRY_CODES = [
+    "AL", "AD", "AT", "BY", "BE", "BA", "BG", "HR", "CY", "CZ",
+    "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IS", "IE", "IT",
+    "LV", "LI", "LT", "LU", "MT", "MD", "MC", "ME", "NL", "MK",
+    "NO", "PL", "PT", "RO", "RU", "SM", "RS", "SK", "SI", "ES",
+    "SE", "CH", "UA", "GB", "VA",
+]
+
 
 class CheckableComboBox(QComboBox):
     def __init__(self) -> None:
@@ -285,6 +305,38 @@ class ResultsWindow(QMainWindow):
         self.setCentralWidget(container)
 
 
+class AnalysisWindow(QMainWindow):
+    def __init__(self, question: str, result: str) -> None:
+        super().__init__()
+        self.setWindowTitle("AI Post Analysis")
+        self.resize(800, 600)
+        self.setStyleSheet(APP_STYLESHEET)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+
+        title = QLabel("AI post analysis")
+        title.setObjectName("pageTitle")
+        question_heading = QLabel("Question")
+        question_heading.setObjectName("sectionLabel")
+        self.question_label = QLabel(question)
+        self.question_label.setWordWrap(True)
+
+        result_heading = QLabel("Answer")
+        result_heading.setObjectName("sectionLabel")
+        self.result_text = QPlainTextEdit(result)
+        self.result_text.setReadOnly(True)
+
+        layout.addWidget(title)
+        layout.addWidget(question_heading)
+        layout.addWidget(self.question_label)
+        layout.addWidget(result_heading)
+        layout.addWidget(self.result_text, 1)
+        self.setCentralWidget(container)
+
+
 def configure_results_table(table: QTableWidget) -> None:
     table.setAlternatingRowColors(True)
     table.setSortingEnabled(True)
@@ -311,16 +363,19 @@ def populate_results_table(
     table.clear()
     table.setRowCount(len(dataframe))
     table.setColumnCount(len(dataframe.columns))
-    table.setHorizontalHeaderLabels(
-        [column.replace("_", " ").title() for column in dataframe.columns]
-    )
+    table.setHorizontalHeaderLabels([
+        str(column).replace("_", " ").title()
+        for column in dataframe.columns
+    ])
 
-    for row_number, row in dataframe.iterrows():
-        for column_number, column in enumerate(dataframe.columns):
+    for row_number, row in enumerate(
+        dataframe.itertuples(index=False, name=None)
+    ):
+        for column_number, value in enumerate(row):
             table.setItem(
                 row_number,
                 column_number,
-                SortableTableItem(row[column]),
+                SortableTableItem(value),
             )
 
     table.resizeColumnsToContents()
@@ -332,13 +387,15 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.results = pd.DataFrame()
         self.results_window: ResultsWindow | None = None
-        self.analysis_window: ResultsWindow | None = None
+        self.analysis_window: AnalysisWindow | None = None
         self.bql_query = ""
         self.post_analysis_request: str | None = None
         self.setWindowTitle("Convertible Bond Explorer")
         self.resize(1180, 800)
         self.setMinimumSize(900, 650)
         self.setStyleSheet(APP_STYLESHEET)
+
+        self.get_benchmarks = False
 
         self.request_input = RequestInput()
         self.request_input.setPlaceholderText(
@@ -360,7 +417,7 @@ class MainWindow(QMainWindow):
         self.bql.setMaximumHeight(58)
         self.bql.setPlaceholderText("BQL will appear after submitting a search")
         self.bql.setToolTip(
-            "Generated for Bloomberg inspection; results currently come from CSV."
+            "The generated query submitted to Bloomberg BQL."
         )
         self.bql.setStyleSheet('font-family: Consolas, "Courier New";')
 
@@ -398,7 +455,7 @@ class MainWindow(QMainWindow):
 
         self.rating_items: dict[CreditRating, QStandardItem] = {}
         self.rating_group = QGroupBox("Credit rating")
-        self.rating_layout = QVBoxLayout()
+        rating_layout = QVBoxLayout()
         self.rating_dropdown = CheckableComboBox()
         self.rating_dropdown.activated.connect(
             self.update_rating_summary
@@ -417,12 +474,11 @@ class MainWindow(QMainWindow):
         self.rating_model.itemChanged.connect(
             self.rating_selection_changed
         )
-        self.rating_layout.addWidget(self.rating_dropdown)
-
-        self.rating_group.setLayout(self.rating_layout)
+        rating_layout.addWidget(self.rating_dropdown)
+        self.rating_group.setLayout(rating_layout)
 
         self.price_group = QGroupBox("Price")
-        self.price_layout = QHBoxLayout()
+        price_layout = QHBoxLayout()
         self.minimum_price = QLineEdit()
         self.minimum_price.setPlaceholderText("Min")
         self.maximum_price = QLineEdit()
@@ -435,14 +491,14 @@ class MainWindow(QMainWindow):
         self.minimum_price.setValidator(price_validator)
         self.maximum_price.setValidator(price_validator)
 
-        self.price_layout.addWidget(QLabel("Min"))
-        self.price_layout.addWidget(self.minimum_price)
-        self.price_layout.addWidget(QLabel("Max"))
-        self.price_layout.addWidget(self.maximum_price)
-        self.price_group.setLayout(self.price_layout)
+        price_layout.addWidget(QLabel("Min"))
+        price_layout.addWidget(self.minimum_price)
+        price_layout.addWidget(QLabel("Max"))
+        price_layout.addWidget(self.maximum_price)
+        self.price_group.setLayout(price_layout)
 
         self.coupon_group = QGroupBox("Coupon")
-        self.coupon_layout = QHBoxLayout()
+        coupon_layout = QHBoxLayout()
         self.minimum_coupon = QLineEdit()
         self.minimum_coupon.setPlaceholderText("Min")
         self.maximum_coupon = QLineEdit()
@@ -455,59 +511,74 @@ class MainWindow(QMainWindow):
         self.minimum_coupon.setValidator(coupon_validator)
         self.maximum_coupon.setValidator(coupon_validator)
 
-        self.coupon_layout.addWidget(QLabel("Min"))
-        self.coupon_layout.addWidget(self.minimum_coupon)
-        self.coupon_layout.addWidget(QLabel("Max"))
-        self.coupon_layout.addWidget(self.maximum_coupon)
-        self.coupon_group.setLayout(self.coupon_layout)
+        coupon_layout.addWidget(QLabel("Min"))
+        coupon_layout.addWidget(self.minimum_coupon)
+        coupon_layout.addWidget(QLabel("Max"))
+        coupon_layout.addWidget(self.maximum_coupon)
+        self.coupon_group.setLayout(coupon_layout)
 
         self.issuer_group = QGroupBox("Issuer")
-        self.issuer_layout = QHBoxLayout()
+        issuer_layout = QHBoxLayout()
         self.issuer_input = QLineEdit()
         self.issuer_input.setPlaceholderText("Issuer name")
-        self.issuer_layout.addWidget(self.issuer_input)
-        self.issuer_group.setLayout(self.issuer_layout)
+        issuer_layout.addWidget(self.issuer_input)
+        self.issuer_group.setLayout(issuer_layout)
 
         self.maturity_group = QGroupBox("Maturity (YYYY-MM-DD)")
-        self.maturity_layout = QHBoxLayout()
+        maturity_layout = QHBoxLayout()
         self.minimum_maturity = QLineEdit()
         self.minimum_maturity.setPlaceholderText("Min")
         self.maximum_maturity = QLineEdit()
         self.maximum_maturity.setPlaceholderText("Max")
-        self.maturity_layout.addWidget(self.minimum_maturity)
-        self.maturity_layout.addWidget(self.maximum_maturity)
-        self.maturity_group.setLayout(self.maturity_layout)
+        maturity_layout.addWidget(self.minimum_maturity)
+        maturity_layout.addWidget(self.maximum_maturity)
+        self.maturity_group.setLayout(maturity_layout)
 
         self.currency_group = QGroupBox("Currency")
-        self.currency_layout = QHBoxLayout()
+        currency_layout = QHBoxLayout()
         self.currency_input = QLineEdit()
         self.currency_input.setPlaceholderText("USD")
-        self.currency_layout.addWidget(self.currency_input)
-        self.currency_group.setLayout(self.currency_layout)
+        currency_layout.addWidget(self.currency_input)
+        self.currency_group.setLayout(currency_layout)
 
-        self.universe_group = QGroupBox("Bond universe · BQL only")
-        self.universe_layout = QHBoxLayout()
+        self.universe_group = QGroupBox("Bond universe")
+        universe_layout = QHBoxLayout()
         self.universe_dropdown = QComboBox()
         self.universe_dropdown.addItem("Convertible", "convertible")
         self.universe_dropdown.addItem("High Yield", "high_yield")
-        self.universe_dropdown.addItem(
-            "Convertible or High Yield",
-            "convertible_or_high_yield",
-        )
-        self.universe_layout.addWidget(self.universe_dropdown)
-        self.universe_group.setLayout(self.universe_layout)
+        universe_layout.addWidget(self.universe_dropdown)
+        self.universe_group.setLayout(universe_layout)
 
-        self.country_group = QGroupBox("Country · BQL only")
-        self.country_layout = QHBoxLayout()
+        self.get_benchmarks_checkbox = QCheckBox(
+            "Include benchmark options"
+        )
+        self.get_benchmarks_checkbox.toggled.connect(
+            self.update_get_benchmarks
+        )
+
+        self.high_yield_type_group = QGroupBox("High Yield bond type")
+        high_yield_type_layout = QHBoxLayout()
+        asset_class_row = QHBoxLayout()
+        self.asset_class_checkboxes = {}
+        for asset_class in ("Corporates", "Governments", "Municipals"):
+            checkbox = QCheckBox(asset_class)
+            checkbox.setChecked(asset_class == "Corporates")
+            asset_class_row.addWidget(checkbox)
+            self.asset_class_checkboxes[asset_class] = checkbox
+        high_yield_type_layout.addLayout(asset_class_row)
+        self.high_yield_type_group.setLayout(high_yield_type_layout)
+
+        self.country_group = QGroupBox("Country")
+        country_layout = QHBoxLayout()
         self.country_input = QLineEdit()
-        self.country_input.setPlaceholderText("e.g. United States")
-        self.country_layout.addWidget(self.country_input)
-        self.country_group.setLayout(self.country_layout)
+        self.country_input.setPlaceholderText("e.g. France, Germany, GB")
+        country_layout.addWidget(self.country_input)
+        self.country_group.setLayout(country_layout)
 
         self.amount_outstanding_group = QGroupBox(
-            "Amount outstanding · USD MM · BQL only"
+            "Amount outstanding · USD MM"
         )
-        self.amount_outstanding_layout = QHBoxLayout()
+        amount_outstanding_layout = QHBoxLayout()
         self.minimum_amount_outstanding = QLineEdit("50")
         self.minimum_amount_outstanding.setPlaceholderText("Min")
         self.maximum_amount_outstanding = QLineEdit()
@@ -518,20 +589,17 @@ class MainWindow(QMainWindow):
         )
         self.minimum_amount_outstanding.setValidator(amount_validator)
         self.maximum_amount_outstanding.setValidator(amount_validator)
-        self.amount_outstanding_layout.addWidget(
+        amount_outstanding_layout.addWidget(
             self.minimum_amount_outstanding
         )
-        self.amount_outstanding_layout.addWidget(
+        amount_outstanding_layout.addWidget(
             self.maximum_amount_outstanding
         )
-        self.amount_outstanding_group.setLayout(
-            self.amount_outstanding_layout
-        )
+        self.amount_outstanding_group.setLayout(amount_outstanding_layout)
 
         self.analytics_inputs = {}
         for key, title in (
             ("conversion_premium", "Conversion premium"),
-            ("delta", "Delta"),
             ("yield_to_maturity", "Yield to maturity"),
         ):
             group = QGroupBox(title)
@@ -547,6 +615,10 @@ class MainWindow(QMainWindow):
             group_layout.addWidget(maximum_input)
             group.setLayout(group_layout)
             self.analytics_inputs[key] = (group, minimum_input, maximum_input)
+        self.universe_dropdown.currentIndexChanged.connect(
+            self.update_universe_dependent_filters
+        )
+        self.update_universe_dependent_filters()
 
         self.submit_button = QPushButton("Submit")
         self.submit_button.setObjectName("primaryButton")
@@ -555,8 +627,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(8)
-
-
         title = QLabel("Convertible Bond Explorer")
         title.setObjectName("pageTitle")
         subtitle = QLabel(
@@ -587,23 +657,25 @@ class MainWindow(QMainWindow):
         # Start with issuer identity and credit, move through bond terms,
         # then finish with convertible-specific analytics.
         filter_grid.addWidget(self.universe_group, 0, 0)
-        filter_grid.addWidget(self.country_group, 0, 1)
-        filter_grid.addWidget(self.currency_group, 0, 2)
-        filter_grid.addWidget(self.amount_outstanding_group, 0, 3)
-        filter_grid.addWidget(self.issuer_group, 1, 0)
-        filter_grid.addWidget(self.rating_group, 1, 1)
-        filter_grid.addWidget(self.maturity_group, 1, 2)
-        filter_grid.addWidget(self.coupon_group, 1, 3)
+        filter_grid.addWidget(self.high_yield_type_group, 0, 1, 1, 2)
+        filter_grid.addWidget(self.country_group, 0, 3)
+        filter_grid.addWidget(self.currency_group, 0, 4)
+        filter_grid.addWidget(self.amount_outstanding_group, 1, 0)
+        filter_grid.addWidget(self.issuer_group, 1, 1)
+        filter_grid.addWidget(self.rating_group, 1, 2)
+        filter_grid.addWidget(self.maturity_group, 1, 3)
+        filter_grid.addWidget(self.coupon_group, 1, 4)
         filter_grid.addWidget(self.price_group, 2, 0)
         for column, key in enumerate(
-            ("conversion_premium", "delta", "yield_to_maturity")
+            ("conversion_premium", "yield_to_maturity")
         ):
             filter_grid.addWidget(self.analytics_inputs[key][0], 2, column + 1)
-        for column in range(4):
+        for column in range(5):
             filter_grid.setColumnStretch(column, 1)
         layout.addLayout(filter_grid)
 
         submit_row = QHBoxLayout()
+        submit_row.addWidget(self.get_benchmarks_checkbox)
         submit_row.addStretch()
         submit_row.addWidget(self.submit_button)
         layout.addLayout(submit_row)
@@ -611,7 +683,7 @@ class MainWindow(QMainWindow):
         previews = QGridLayout()
         previews.setSpacing(8)
         previews.addWidget(self.section_label("Generated BQL"), 0, 0)
-        previews.addWidget(self.section_label("Post-analysis prompt"), 0, 1)
+        previews.addWidget(self.section_label("AI Post-analysis prompt"), 0, 1)
         previews.addWidget(self.bql, 1, 0)
         previews.addWidget(self.post_analysis, 1, 1)
         previews.addWidget(
@@ -650,6 +722,46 @@ class MainWindow(QMainWindow):
         label = QLabel(text)
         label.setObjectName("sectionLabel")
         return label
+
+    def update_universe_dependent_filters(
+        self,
+        _index: int | None = None,
+    ) -> None:
+        convertible_selected = (
+            self.universe_dropdown.currentData() == "convertible"
+        )
+        high_yield_only = not convertible_selected
+
+        if not convertible_selected:
+            self.get_benchmarks_checkbox.setChecked(False)
+        self.get_benchmarks_checkbox.setEnabled(convertible_selected)
+        self.get_benchmarks_checkbox.setToolTip(
+            "Available for convertible bonds only."
+            if high_yield_only
+            else ""
+        )
+
+        group, minimum_input, maximum_input = self.analytics_inputs[
+            "conversion_premium"
+        ]
+        if high_yield_only:
+            minimum_input.clear()
+            maximum_input.clear()
+        group.setEnabled(not high_yield_only)
+        group.setToolTip(
+            "Available for convertible universes only."
+            if high_yield_only
+            else ""
+        )
+        self.high_yield_type_group.setEnabled(high_yield_only)
+        self.high_yield_type_group.setToolTip(
+            "Applies to the High Yield branch only."
+            if high_yield_only
+            else "Convertible bonds are restricted to Corporates."
+        )
+
+    def update_get_benchmarks(self, checked: bool) -> None:
+        self.get_benchmarks = checked
 
     def create_rating_item(self, text: str) -> QStandardItem:
         item = QStandardItem(text)
@@ -760,26 +872,6 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if minimum is not None and maximum is not None and minimum > maximum:
-            QMessageBox.warning(
-                self,
-                "Invalid price range",
-                "Minimum price cannot be greater than maximum price.",
-            )
-            return
-
-        if (
-            minimum_coupon is not None
-            and maximum_coupon is not None
-            and minimum_coupon > maximum_coupon
-        ):
-            QMessageBox.warning(
-                self,
-                "Invalid coupon range",
-                "Minimum coupon cannot be greater than maximum coupon.",
-            )
-            return
-
         price_range = (
             PriceRange(minimum=minimum, maximum=maximum)
             if minimum is not None or maximum is not None
@@ -797,11 +889,25 @@ class MainWindow(QMainWindow):
         currency = self.currency_input.text().strip().upper() or None
         country_name = self.country_input.text().strip()
         try:
-            country = self.country_to_iso_code(country_name)
+            countries = self.countries_to_iso_codes(country_name)
         except ValueError as error:
             QMessageBox.warning(self, "Invalid country", str(error))
             return
         bond_universe = self.universe_dropdown.currentData()
+        asset_classes = [
+            asset_class
+            for asset_class, checkbox in self.asset_class_checkboxes.items()
+            if checkbox.isChecked()
+        ]
+        if bond_universe != "convertible" and not asset_classes:
+            QMessageBox.warning(
+                self,
+                "Missing asset class",
+                "Select at least one High Yield asset class.",
+            )
+            return
+        if bond_universe == "high_yield":
+            analytics_values["conversion_premium"] = (None, None)
         maturity_range = (
             DateRange(minimum=minimum_maturity, maximum=maximum_maturity)
             if minimum_maturity is not None or maximum_maturity is not None
@@ -870,18 +976,18 @@ class MainWindow(QMainWindow):
                 SearchFilter(field=SearchField.CONVERSION_PREMIUM,
                              operator=SearchOperator.BETWEEN,
                              value=analytics_ranges["conversion_premium"]),
-                SearchFilter(field=SearchField.DELTA,
-                             operator=SearchOperator.BETWEEN,
-                             value=analytics_ranges["delta"]),
                 SearchFilter(field=SearchField.YIELD_TO_MATURITY,
                              operator=SearchOperator.BETWEEN,
                              value=analytics_ranges["yield_to_maturity"]),
                 SearchFilter(field=SearchField.COUNTRY,
-                             operator=SearchOperator.EQUALS,
-                             value=country),
+                             operator=SearchOperator.IN,
+                             value=countries),
                 SearchFilter(field=SearchField.BOND_UNIVERSE,
                              operator=SearchOperator.EQUALS,
                              value=bond_universe),
+                SearchFilter(field=SearchField.ASSET_CLASSES,
+                             operator=SearchOperator.IN,
+                             value=asset_classes),
                 SearchFilter(field=SearchField.AMOUNT_OUTSTANDING,
                              operator=SearchOperator.BETWEEN,
                              value=amount_outstanding_range),
@@ -893,10 +999,10 @@ class MainWindow(QMainWindow):
 
         try:
             self.bql_query = compile_query(query)
-            # Keep compiling the BQL for inspection/export, but temporarily
-            # source search results from the local CSV instead of Bloomberg.
             self.bql.setPlainText(self.bql_query)
             results = load_bond_data(query)
+            if self.get_benchmarks:
+                results = get_benchmark_options(results)
             self.results = results
             self.display_results(results)
         except Exception as error:
@@ -915,14 +1021,10 @@ class MainWindow(QMainWindow):
         return float(value) if value else None
 
     @staticmethod
-    def country_to_iso_code(value: str) -> str | None:
-        value = value.strip()
-        if not value:
-            return None
-        if len(value) == 2 and value.isalpha():
-            return value.upper()
-
-        normalized_value = value.casefold()
+    def country_to_iso_code(value: str) -> str:
+        normalized_value = value.strip().casefold()
+        if len(normalized_value) == 2 and normalized_value.isalpha():
+            return normalized_value.upper()
         for country in QLocale.Country:
             country_name = QLocale.territoryToString(country)
             country_code = QLocale.territoryToCode(country)
@@ -935,6 +1037,24 @@ class MainWindow(QMainWindow):
         raise ValueError(
             f"Unknown country '{value}'. Enter a country name or two-letter ISO code."
         )
+
+    @classmethod
+    def countries_to_iso_codes(cls, value: str) -> list[str] | None:
+        entries = [entry.strip() for entry in value.split(",") if entry.strip()]
+        if not entries:
+            return None
+
+        codes = []
+        for entry in entries:
+            entry_codes = (
+                EUROPE_COUNTRY_CODES
+                if entry.casefold() == "europe"
+                else [cls.country_to_iso_code(entry)]
+            )
+            for code in entry_codes:
+                if code not in codes:
+                    codes.append(code)
+        return codes
 
     @staticmethod
     def parse_date(value: str) -> date | None:
@@ -979,10 +1099,9 @@ class MainWindow(QMainWindow):
                 self.results,
                 self.bql_query,
             )
-            self.analysis_window = ResultsWindow(
-                analysis,
-                window_title="AI Post Analysis",
-                heading="AI post analysis",
+            self.analysis_window = AnalysisWindow(
+                question=self.post_analysis_request,
+                result=analysis,
             )
             self.analysis_window.show()
             self.analysis_window.raise_()
@@ -1005,44 +1124,41 @@ class MainWindow(QMainWindow):
                 "There are no search results to export.",
             )
             return
-        else:
-            csv_name = self.csv_name.toPlainText().strip()
+        csv_name = self.csv_name.toPlainText().strip()
 
-            if not csv_name:
-                QMessageBox.warning(
-                    self,
-                    "Missing CSV name",
-                    "Enter a name for the CSV file.",
-                )
-                return
+        if not csv_name:
+            QMessageBox.warning(
+                self,
+                "Missing CSV name",
+                "Enter a name for the CSV file.",
+            )
+            return
 
-            if not csv_name.lower().endswith(".csv"):
-                csv_name += ".csv"
+        if not csv_name.lower().endswith(".csv"):
+            csv_name += ".csv"
 
-            if not csv_name.lower().startswith("data/"):
-                csv_name = f"data/{csv_name}"
+        if not csv_name.lower().startswith("data/"):
+            csv_name = f"data/{csv_name}"
 
-            try:
-                self.results.to_csv(csv_name, index=False)
-                QMessageBox.information(
-                    self,
-                    "Export successful",
-                    f"Search results exported to {csv_name}.",
-                )
-            except Exception as error:
-                QMessageBox.critical(
-                    self,
-                    "Export failed",
-                    str(error),
-                )
+        try:
+            self.results.to_csv(csv_name, index=False)
+            QMessageBox.information(
+                self,
+                "Export successful",
+                f"Search results exported to {csv_name}.",
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Export failed",
+                str(error),
+            )
 
     def display_query_in_controls(
         self,
         query: BondSearchQuery,
     ) -> None:
-        self.post_analysis_request = query.post_analysis
         self.post_analysis.setPlainText(query.post_analysis or "")
-        self.update_analysis_button()
 
         # Clear the previous selection.
         for item in self.rating_items.values():
@@ -1057,6 +1173,8 @@ class MainWindow(QMainWindow):
         self.currency_input.clear()
         self.country_input.clear()
         self.universe_dropdown.setCurrentIndex(0)
+        for asset_class, checkbox in self.asset_class_checkboxes.items():
+            checkbox.setChecked(asset_class == "Corporates")
         self.minimum_amount_outstanding.setText("50")
         self.maximum_amount_outstanding.clear()
         for _, minimum_input, maximum_input in self.analytics_inputs.values():
@@ -1068,6 +1186,12 @@ class MainWindow(QMainWindow):
                 index = self.universe_dropdown.findData(search_filter.value)
                 if index >= 0:
                     self.universe_dropdown.setCurrentIndex(index)
+                continue
+
+            if search_filter.field == SearchField.ASSET_CLASSES:
+                selected = set(search_filter.value or [])
+                for asset_class, checkbox in self.asset_class_checkboxes.items():
+                    checkbox.setChecked(asset_class in selected)
                 continue
 
             if search_filter.field == SearchField.AMOUNT_OUTSTANDING:
@@ -1084,7 +1208,9 @@ class MainWindow(QMainWindow):
                 continue
 
             if search_filter.field == SearchField.COUNTRY:
-                if isinstance(search_filter.value, str):
+                if isinstance(search_filter.value, list):
+                    self.country_input.setText(", ".join(search_filter.value))
+                elif isinstance(search_filter.value, str):
                     self.country_input.setText(search_filter.value)
                 continue
 
@@ -1104,7 +1230,6 @@ class MainWindow(QMainWindow):
 
             analytics_key = {
                 SearchField.CONVERSION_PREMIUM: "conversion_premium",
-                SearchField.DELTA: "delta",
                 SearchField.YIELD_TO_MATURITY: "yield_to_maturity",
             }.get(search_filter.field)
             if analytics_key is not None:
@@ -1165,3 +1290,5 @@ class MainWindow(QMainWindow):
                     if rating in selected_ratings
                     else Qt.CheckState.Unchecked
                 )
+
+        self.update_universe_dependent_filters()

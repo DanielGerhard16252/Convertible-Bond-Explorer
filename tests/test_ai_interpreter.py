@@ -66,27 +66,31 @@ def test_query_accepts_post_analysis_instructions():
     assert query.post_analysis == "Rank the results by yield."
 
 
-def test_live_openai_interpretation():
+@pytest.mark.integration
+def test_live_openai_interpretation_bbb():
     query = interpret_request_with_ai(
         "Show me BBB-rated convertible bonds"
     )
 
     assert query.filters[0].value == ["BBB"]
 
-def test_live_openai_interpretation():
+@pytest.mark.integration
+def test_live_openai_interpretation_aaa():
     query = interpret_request_with_ai(
         "AAA Bonds"
     )
 
     assert query.filters[0].value == ["AAA"]
 
-def test_live_openai_interpretation():
+@pytest.mark.integration
+def test_live_openai_interpretation_c():
     query = interpret_request_with_ai(
         "Bonds with credit C"
     )
 
     assert query.filters[0].value == ["C"]
 
+@pytest.mark.integration
 def test_live_openai_interpretation_returns_null_for_invalid_rating():
     query = interpret_request_with_ai(
         "Bonds with oiajds credit rating"
