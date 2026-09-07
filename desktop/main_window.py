@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QTableWidget, 
     QTableWidgetItem,
     QGroupBox,
+    QTextBrowser,
 )
 from PySide6.QtCore import QLocale, Qt, Signal
 from PySide6.QtGui import (
@@ -32,9 +33,9 @@ from numbers import Real
 
 from server.ai_interpreter import interpret_request_with_ai
 from server.ai_analysis import run_post_analysis
+from server.bloomberg_api import execute_bql
 from server.bql_compiler import compile_query
 from server.benchmarks import get_benchmark_options
-from server.csv_provider import load_bond_data
 from shared.models import (
     BondSearchQuery,
     CouponRange,
@@ -110,7 +111,7 @@ QGroupBox::title:disabled {
     background-color: #f3f6fb;
 }
 
-QLineEdit, QPlainTextEdit, QComboBox {
+QLineEdit, QPlainTextEdit, QTextBrowser, QComboBox {
     background-color: #f8fafc;
     border: 1px solid #cbd7e6;
     border-radius: 7px;
@@ -119,7 +120,7 @@ QLineEdit, QPlainTextEdit, QComboBox {
     selection-color: #ffffff;
 }
 
-QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {
+QLineEdit:focus, QPlainTextEdit:focus, QTextBrowser:focus, QComboBox:focus {
     background-color: #ffffff;
     border: 2px solid #4381ee;
 }
@@ -252,8 +253,8 @@ class RequestInput(QPlainTextEdit):
 
 
 class SortableTableItem(QTableWidgetItem):
-    def __init__(self, value) -> None:
-        super().__init__(str(value))
+    def __init__(self, value, display_value: str | None = None) -> None:
+        super().__init__(display_value if display_value is not None else str(value))
         self.sort_value = self.normalized_sort_value(value)
 
     @staticmethod
@@ -326,8 +327,9 @@ class AnalysisWindow(QMainWindow):
 
         result_heading = QLabel("Answer")
         result_heading.setObjectName("sectionLabel")
-        self.result_text = QPlainTextEdit(result)
-        self.result_text.setReadOnly(True)
+        self.result_text = QTextBrowser()
+        self.result_text.setMarkdown(result)
+        self.result_text.setOpenExternalLinks(True)
 
         layout.addWidget(title)
         layout.addWidget(question_heading)
@@ -372,14 +374,28 @@ def populate_results_table(
         dataframe.itertuples(index=False, name=None)
     ):
         for column_number, value in enumerate(row):
+            column = str(dataframe.columns[column_number])
             table.setItem(
                 row_number,
                 column_number,
-                SortableTableItem(value),
+                SortableTableItem(
+                    value,
+                    format_table_value(column, value),
+                ),
             )
 
     table.resizeColumnsToContents()
     table.setSortingEnabled(True)
+
+
+def format_table_value(column: str, value) -> str:
+    if column.casefold() != "maturity" or pd.isna(value):
+        return str(value)
+
+    maturity = pd.to_datetime(value, errors="coerce")
+    if pd.isna(maturity):
+        return str(value)
+    return maturity.strftime("%m-%d-%Y")
 
 
 class MainWindow(QMainWindow):
@@ -1000,7 +1016,7 @@ class MainWindow(QMainWindow):
         try:
             self.bql_query = compile_query(query)
             self.bql.setPlainText(self.bql_query)
-            results = load_bond_data(query)
+            results = execute_bql(self.bql_query)
             if self.get_benchmarks:
                 results = get_benchmark_options(results)
             self.results = results

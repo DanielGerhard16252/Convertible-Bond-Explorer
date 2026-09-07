@@ -361,6 +361,15 @@ def build_system_prompt(current_date: date | None = None) -> str:
         f"{SYSTEM_PROMPT}"
     )
 
+
+def parse_ai_query(value) -> BondSearchQuery:
+    if isinstance(value, BondSearchQuery):
+        return value
+    if isinstance(value, str):
+        return BondSearchQuery.model_validate_json(value)
+    return BondSearchQuery.model_validate(value)
+
+
 def interpret_request_with_ai(text: str) -> BondSearchQuery:
     response = client.responses.parse(
         model=os.getenv("OPENAI_MODEL", "gpt-5.6"),
@@ -377,9 +386,7 @@ def interpret_request_with_ai(text: str) -> BondSearchQuery:
         text_format=BondSearchQuery,
     )
 
-    query = response.output_parsed
-
-    if query is None:
+    if response.output_parsed is None:
         raise ValueError("The AI response could not be parsed")
 
-    return query
+    return parse_ai_query(response.output_parsed)

@@ -7,13 +7,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QTableWidget
 
 import desktop.main_window as main_window_module
+import server.benchmarks as benchmarks_module
 from desktop.main_window import MainWindow, populate_results_table
 
 
-def test_submit_compiles_bql_and_displays_csv_results(monkeypatch):
+def test_submit_sends_bql_and_displays_bloomberg_results(monkeypatch):
     app = QApplication.instance() or QApplication([])
     submitted = []
-    csv_results = pd.DataFrame([
+    bloomberg_results = pd.DataFrame([
         {
             "ID": "XS0000000001 Corp",
             "SECURITY_DES": "Example Convertible",
@@ -26,25 +27,25 @@ def test_submit_compiles_bql_and_displays_csv_results(monkeypatch):
         },
     ])
 
-    def fake_load_bond_data(query):
+    def fake_execute_bql(query):
         submitted.append(query)
-        return csv_results
+        return bloomberg_results
 
     monkeypatch.setattr(
         main_window_module,
-        "load_bond_data",
-        fake_load_bond_data,
+        "execute_bql",
+        fake_execute_bql,
     )
     window = MainWindow()
     try:
         window.submit_search()
         app.processEvents()
 
-        assert len(submitted) == 1
+        assert submitted == [window.bql_query]
         assert window.bql.toPlainText() == window.bql_query
         assert window.bql_query.startswith("GET(")
         assert "FOR(filter(bondsuniv('active'" in window.bql_query
-        assert window.results.equals(csv_results)
+        assert window.results.equals(bloomberg_results)
         assert window.results_table.rowCount() == 2
         assert window.results_table.columnCount() == 3
         assert window.results_count.text() == "2 results"
@@ -96,12 +97,26 @@ def test_results_table_uses_row_positions_not_dataframe_index_labels():
     app.processEvents()
 
 
+def test_results_table_displays_maturity_in_american_format():
+    app = QApplication.instance() or QApplication([])
+    table = QTableWidget()
+
+    populate_results_table(
+        table,
+        pd.DataFrame({"MATURITY": ["2030-01-07"]}),
+    )
+
+    assert table.item(0, 0).text() == "01-07-2030"
+    table.deleteLater()
+    app.processEvents()
+
+
 def test_analysis_window_displays_question_and_string_result(monkeypatch):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(
         main_window_module,
         "run_post_analysis",
-        lambda *_args: "The highest-yielding bond is Bond A.",
+        lambda *_args: "## Result\n\n**Bond A** has the highest yield.",
     )
     window = MainWindow()
     try:
@@ -118,10 +133,48 @@ def test_analysis_window_displays_question_and_string_result(monkeypatch):
         assert window.analysis_window.question_label.text() == (
             "Which bond has the highest yield?"
         )
-        assert window.analysis_window.result_text.toPlainText() == (
-            "The highest-yielding bond is Bond A."
-        )
+        rendered_text = window.analysis_window.result_text.toPlainText()
+        assert "Result" in rendered_text
+        assert "Bond A has the highest yield." in rendered_text
+        assert "**" not in rendered_text
     finally:
         if window.analysis_window is not None:
             window.analysis_window.close()
+        window.close()
+
+
+def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    bond_results = pd.DataFrame([{
+        "CV_COMMON_TICKER_EXCH": "AAA US Equity",
+        "CV_CNVS_PX": 100.0,
+        "MATURITY": "2030-01-01",
+    }])
+    monkeypatch.setattr(
+        main_window_module,
+        "execute_bql",
+        lambda _query: bond_results,
+    )
+    monkeypatch.setattr(
+        benchmarks_module,
+        "execute_bql",
+        lambda _query: pd.DataFrame([{"NAME": "AAA call"}]),
+    )
+
+    window = MainWindow()
+    try:
+        window.get_benchmarks_checkbox.setChecked(True)
+        window.submit_search()
+        app.processEvents()
+
+        assert window.results.loc[0, "BENCHMARK_NAME"] == "AAA call"
+        headers = [
+            window.results_table.horizontalHeaderItem(column).text()
+            for column in range(window.results_table.columnCount())
+        ]
+        benchmark_column = headers.index("Benchmark Name")
+        assert window.results_table.item(0, benchmark_column).text() == (
+            "AAA call"
+        )
+    finally:
         window.close()

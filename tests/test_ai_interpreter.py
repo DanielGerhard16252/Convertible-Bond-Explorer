@@ -1,6 +1,9 @@
-import pytest
 from datetime import date
+from types import SimpleNamespace
 
+import pytest
+
+import server.ai_interpreter as ai_interpreter_module
 from server.bql_compiler import compile_query
 from shared.models import BondSearchQuery
 
@@ -64,6 +67,31 @@ def test_query_accepts_post_analysis_instructions():
     )
 
     assert query.post_analysis == "Rank the results by yield."
+
+
+def test_ai_interpreter_converts_json_string_to_query(monkeypatch):
+    parsed_json = BondSearchQuery.model_validate({
+        "filters": [{
+            "field": "credit_rating",
+            "operator": "in",
+            "value": ["BBB"],
+        }],
+    }).model_dump_json()
+
+    class Responses:
+        def parse(self, **_kwargs):
+            return SimpleNamespace(output_parsed=parsed_json)
+
+    monkeypatch.setattr(
+        ai_interpreter_module,
+        "client",
+        SimpleNamespace(responses=Responses()),
+    )
+
+    query = interpret_request_with_ai("BBB bonds")
+
+    assert isinstance(query, BondSearchQuery)
+    assert query.filters[0].value == ["BBB"]
 
 
 @pytest.mark.integration
