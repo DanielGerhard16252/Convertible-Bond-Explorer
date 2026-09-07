@@ -27,8 +27,9 @@ def test_submit_sends_bql_and_displays_bloomberg_results(monkeypatch):
         },
     ])
 
-    def fake_execute_bql(query):
+    def fake_execute_bql(query, requested_columns=None):
         submitted.append(query)
+        assert requested_columns is not None
         return bloomberg_results
 
     monkeypatch.setattr(
@@ -111,6 +112,30 @@ def test_results_table_displays_maturity_in_american_format():
     app.processEvents()
 
 
+def test_results_table_displays_prices_and_yields_to_three_decimals():
+    app = QApplication.instance() or QApplication([])
+    table = QTableWidget()
+
+    populate_results_table(
+        table,
+        pd.DataFrame({
+            "PX_LAST": [101.2],
+            "CV_CNVS_PX": [98.76543],
+            "YIELD(YIELD_TYPE=YTM)": [4],
+            "BENCHMARK_STRIKE_PX": [100.5555],
+        }),
+    )
+
+    assert [table.item(0, column).text() for column in range(4)] == [
+        "101.200",
+        "98.765",
+        "4.000",
+        "100.555",
+    ]
+    table.deleteLater()
+    app.processEvents()
+
+
 def test_analysis_window_displays_question_and_string_result(monkeypatch):
     app = QApplication.instance() or QApplication([])
     monkeypatch.setattr(
@@ -153,7 +178,7 @@ def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
     monkeypatch.setattr(
         main_window_module,
         "execute_bql",
-        lambda _query: bond_results,
+        lambda _query, requested_columns=None: bond_results,
     )
     monkeypatch.setattr(
         benchmarks_module,

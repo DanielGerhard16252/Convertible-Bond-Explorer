@@ -11,7 +11,7 @@ def test_compiles_required_convertible_corporate_universe():
     assert bql == (
         "GET(SECURITY_DES, CV_COMMON_TICKER_EXCH, BB_COMPOSITE, "
         "CV_CNVS_PX, PX_LAST, CPN, MATURITY, CRNCY, "
-        "DELTA, YIELD(YIELD_TYPE=YTM), LONG_COMP_NAME) "
+        "DELTA, YIELD(YIELD_TYPE=YTM), LONG_COMP_NAME, INDUSTRY_SECTOR) "
         "FOR(filter(bondsuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
         "(CONVERTIBLE == 'Y' AND SRCH_ASSET_CLASS == 'Corporates') AND "

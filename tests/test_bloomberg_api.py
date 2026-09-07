@@ -41,3 +41,42 @@ def test_execute_bql_submits_query_and_converts_combined_result(monkeypatch):
     assert result.to_dict("records") == [
         {"ID": "XS0000000001 Corp", "PX_LAST": 101.25}
     ]
+
+
+def test_execute_bql_keeps_only_requested_columns(monkeypatch):
+    class CombinedResult:
+        def to_dicts(self):
+            return [{
+                "ID": "XS0000000001 Corp",
+                "PX_LAST": 101.25,
+                "CRNCY": "USD",
+                "CURRENCY": None,
+                "DATE": "2026-09-07",
+            }]
+
+    class BqlResult:
+        def combine(self):
+            return CombinedResult()
+
+    class FakeBQuery:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def bql(self, _query):
+            return BqlResult()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "polars_bloomberg",
+        SimpleNamespace(BQuery=FakeBQuery),
+    )
+
+    result = execute_bql(
+        "GET(PX_LAST, CRNCY) FOR(BONDS)",
+        requested_columns=("ID", "PX_LAST", "CRNCY"),
+    )
+
+    assert result.columns.tolist() == ["ID", "PX_LAST", "CRNCY"]

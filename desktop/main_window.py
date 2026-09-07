@@ -34,7 +34,7 @@ from numbers import Real
 from server.ai_interpreter import interpret_request_with_ai
 from server.ai_analysis import run_post_analysis
 from server.bloomberg_api import execute_bql
-from server.bql_compiler import compile_query
+from server.bql_compiler import BQL_RESULT_COLUMNS, compile_query
 from server.benchmarks import get_benchmark_options
 from shared.models import (
     BondSearchQuery,
@@ -211,6 +211,17 @@ EUROPE_COUNTRY_CODES = [
     "NO", "PL", "PT", "RO", "RU", "SM", "RS", "SK", "SI", "ES",
     "SE", "CH", "UA", "GB", "VA",
 ]
+
+THREE_DECIMAL_COLUMNS = {
+    "price",
+    "px_last",
+    "conversion_price",
+    "cv_cnvs_px",
+    "strike_px",
+    "benchmark_strike_px",
+    "yield_to_maturity",
+    "yield(yield_type=ytm)",
+}
 
 
 class CheckableComboBox(QComboBox):
@@ -389,13 +400,25 @@ def populate_results_table(
 
 
 def format_table_value(column: str, value) -> str:
-    if column.casefold() != "maturity" or pd.isna(value):
+    if pd.isna(value):
+        return str(value)
+
+    normalized_column = column.casefold()
+    if normalized_column in THREE_DECIMAL_COLUMNS:
+        try:
+            return f"{float(value):.3f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    if normalized_column != "maturity":
         return str(value)
 
     maturity = pd.to_datetime(value, errors="coerce")
-    if pd.isna(maturity):
-        return str(value)
-    return maturity.strftime("%m-%d-%Y")
+    return (
+        str(value)
+        if pd.isna(maturity)
+        else maturity.strftime("%m-%d-%Y")
+    )
 
 
 class MainWindow(QMainWindow):
@@ -1016,7 +1039,10 @@ class MainWindow(QMainWindow):
         try:
             self.bql_query = compile_query(query)
             self.bql.setPlainText(self.bql_query)
-            results = execute_bql(self.bql_query)
+            results = execute_bql(
+                self.bql_query,
+                requested_columns=BQL_RESULT_COLUMNS,
+            )
             if self.get_benchmarks:
                 results = get_benchmark_options(results)
             self.results = results
