@@ -1,14 +1,109 @@
 import os
+import time
+from threading import Event
 
 import pandas as pd
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QTableWidget
+from PySide6.QtCore import QThread, QTimer
+from PySide6.QtTest import QTest
 
 import desktop.main_window as main_window_module
 import server.benchmarks as benchmarks_module
 from desktop.main_window import MainWindow, populate_results_table
+
+
+def wait_for(app, condition):
+    deadline = time.monotonic() + 5
+    while not condition() and time.monotonic() < deadline:
+        app.processEvents()
+        QTest.qWait(5)
+    assert condition()
+
+
+def test_ai_jobs_are_independent_and_keep_ui_responsive(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    release = Event()
+    interpreter_started = Event()
+    analysis_started = Event()
+    captured = []
+
+    def interpret(request):
+        assert QThread.currentThread() != app.thread()
+        interpreter_started.set()
+        assert release.wait(5)
+        return main_window_module.BondSearchQuery(filters=[])
+
+    def analyse(question, dataset, bql):
+        assert QThread.currentThread() != app.thread()
+        analysis_started.set()
+        assert release.wait(5)
+        captured.append((question, dataset.iloc[0, 0], bql))
+        return "Completed"
+
+    monkeypatch.setattr(main_window_module, "interpret_request_with_ai", interpret)
+    monkeypatch.setattr(main_window_module, "run_post_analysis", analyse)
+    window = MainWindow()
+    try:
+        window.request_input.setPlainText("Find bonds")
+        window.results = pd.DataFrame({"price": [100]})
+        window.bql_query = "original BQL"
+        window.post_analysis.setPlainText("Original question")
+        window.interpret_request()
+        window.run_analysis()
+        wait_for(app, lambda: interpreter_started.is_set() and analysis_started.is_set())
+        ticks = []
+        QTimer.singleShot(0, lambda: ticks.append(True))
+        wait_for(app, lambda: bool(ticks))
+        original_job = window._interpret_job
+        window.interpret_request()
+        assert window._interpret_job is original_job
+        window.post_analysis.setPlainText("Edited question")
+        window.results.iloc[0, 0] = 200
+        window.bql_query = "edited BQL"
+        assert not window.run_analysis_button.isEnabled()
+        release.set()
+        wait_for(app, lambda: window._interpret_job is None and window._analysis_job is None)
+        assert captured == [("Original question", 100, "original BQL")]
+        assert window.analysis_window.question_label.text() == "Original question"
+        assert window.interpret_button.isEnabled()
+    finally:
+        release.set()
+        wait_for(app, lambda: window._interpret_job is None and window._analysis_job is None)
+        if window.analysis_window:
+            window.analysis_window.close()
+        window.close()
+
+
+def test_ai_errors_restore_controls_on_ui_thread(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    errors = []
+
+    def fail(*args):
+        raise RuntimeError("Service unavailable")
+
+    def report(parent, title, message):
+        assert QThread.currentThread() == app.thread()
+        errors.append(message)
+
+    monkeypatch.setattr(main_window_module, "interpret_request_with_ai", fail)
+    monkeypatch.setattr(main_window_module, "run_post_analysis", fail)
+    monkeypatch.setattr(main_window_module.QMessageBox, "critical", report)
+    window = MainWindow()
+    try:
+        window.request_input.setPlainText("Find bonds")
+        window.results = pd.DataFrame({"price": [100]})
+        window.post_analysis.setPlainText("Analyse")
+        window.interpret_request()
+        window.run_analysis()
+        wait_for(app, lambda: window._interpret_job is None and window._analysis_job is None)
+        assert errors == ["Service unavailable", "Service unavailable"]
+        assert window.interpret_button.isEnabled()
+        assert window.run_analysis_button.isEnabled()
+    finally:
+        window.close()
 
 
 def test_submit_sends_bql_and_displays_bloomberg_results(monkeypatch):
@@ -121,14 +216,16 @@ def test_results_table_displays_prices_and_yields_to_three_decimals():
         pd.DataFrame({
             "PX_LAST": [101.2],
             "CV_CNVS_PX": [98.76543],
+            "CV_CNVS_RATIO": [2.34567],
             "YIELD(YIELD_TYPE=YTM)": [4],
             "BENCHMARK_STRIKE_PX": [100.5555],
         }),
     )
 
-    assert [table.item(0, column).text() for column in range(4)] == [
+    assert [table.item(0, column).text() for column in range(5)] == [
         "101.200",
         "98.765",
+        "2.346",
         "4.000",
         "100.555",
     ]
@@ -152,7 +249,7 @@ def test_analysis_window_displays_question_and_string_result(monkeypatch):
         )
 
         window.run_analysis()
-        app.processEvents()
+        wait_for(app, lambda: window._analysis_job is None)
 
         assert window.analysis_window is not None
         assert window.analysis_window.question_label.text() == (

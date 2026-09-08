@@ -9,9 +9,9 @@ def test_compiles_required_convertible_corporate_universe():
     bql = compile_query(BondSearchQuery(filters=[]))
 
     assert bql == (
-        "GET(SECURITY_DES, CV_COMMON_TICKER_EXCH, BB_COMPOSITE, "
-        "CV_CNVS_PX, PX_LAST, CPN, MATURITY, CRNCY, "
-        "DELTA, YIELD(YIELD_TYPE=YTM), LONG_COMP_NAME, INDUSTRY_SECTOR) "
+        "GET(LONG_COMP_NAME, CV_COMMON_TICKER_EXCH, INDUSTRY_SECTOR, "
+        "CRNCY, BB_COMPOSITE, PX_LAST, CV_CNVS_PX, CV_CNVS_RATIO, CPN, "
+        "YIELD(YIELD_TYPE=YTM), MATURITY, DELTA, SECURITY_DES) "
         "FOR(filter(bondsuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
         "(CONVERTIBLE == 'Y' AND SRCH_ASSET_CLASS == 'Corporates') AND "

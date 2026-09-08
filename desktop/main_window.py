@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QTextBrowser,
 )
-from PySide6.QtCore import QLocale, Qt, Signal
+from PySide6.QtCore import QLocale, Qt, Signal, Slot, QThreadPool
 from PySide6.QtGui import (
     QDoubleValidator,
     QKeyEvent,
@@ -32,6 +32,7 @@ from datetime import date, datetime
 from numbers import Real
 
 from server.ai_interpreter import interpret_request_with_ai
+from desktop.background import BackgroundJob
 from server.ai_analysis import run_post_analysis
 from server.bloomberg_api import execute_bql
 from server.bql_compiler import BQL_RESULT_COLUMNS, compile_query
@@ -217,6 +218,8 @@ THREE_DECIMAL_COLUMNS = {
     "px_last",
     "conversion_price",
     "cv_cnvs_px",
+    "conversion_ratio",
+    "cv_cnvs_ratio",
     "strike_px",
     "benchmark_strike_px",
     "yield_to_maturity",
@@ -425,6 +428,10 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.results = pd.DataFrame()
+        self._interpret_job = None
+        self._analysis_job = None
+        self._analysis_question = ""
+        self._closing = False
         self.results_window: ResultsWindow | None = None
         self.analysis_window: AnalysisWindow | None = None
         self.bql_query = ""
@@ -849,6 +856,8 @@ class MainWindow(QMainWindow):
         )
 
     def interpret_request(self) -> None:
+        if self._interpret_job is not None or self._closing:
+            return
         request = self.request_input.toPlainText().strip()
 
         if not request:
@@ -862,22 +871,26 @@ class MainWindow(QMainWindow):
         self.interpret_button.setEnabled(False)
         self.interpret_button.setText("Interpreting...")
 
-        try:
-            query = interpret_request_with_ai(request)
-            self.display_query_in_controls(query)
+        self._interpret_job = BackgroundJob(interpret_request_with_ai, request)
+        self._interpret_job.signals.completed.connect(self._interpret_finished)
+        QThreadPool.globalInstance().start(self._interpret_job)
 
-        except Exception as error:
+    @Slot(object, object)
+    def _interpret_finished(self, query, error) -> None:
+        self._interpret_job = None
+        if self._closing:
+            return
+        self.interpret_button.setEnabled(True)
+        self.interpret_button.setText("Interpret request")
+        if error is not None:
             QMessageBox.critical(
                 self,
                 "Interpretation failed",
                 str(error),
             )
 
-        finally:
-            self.interpret_button.setEnabled(True)
-            self.interpret_button.setText(
-                "Interpret request"
-            )
+        else:
+            self.display_query_in_controls(query)
 
     def submit_search(self) -> None:
         selected_ratings = [
@@ -1121,6 +1134,7 @@ class MainWindow(QMainWindow):
     def update_analysis_button(self) -> None:
         self.run_analysis_button.setEnabled(
             bool(self.post_analysis_request) and not self.results.empty
+            and self._analysis_job is None
         )
 
     def post_analysis_changed(self) -> None:
@@ -1130,33 +1144,49 @@ class MainWindow(QMainWindow):
         self.update_analysis_button()
 
     def run_analysis(self) -> None:
+        if self._analysis_job is not None or self._closing:
+            return
         if not self.post_analysis_request or self.results.empty:
             return
 
         self.run_analysis_button.setEnabled(False)
         self.run_analysis_button.setText("Analysing...")
-        try:
-            analysis = run_post_analysis(
-                self.post_analysis_request,
-                self.results,
-                self.bql_query,
-            )
+        self._analysis_question = self.post_analysis_request
+        self._analysis_job = BackgroundJob(
+            run_post_analysis,
+            self._analysis_question,
+            self.results.copy(deep=True),
+            self.bql_query,
+        )
+        self._analysis_job.signals.completed.connect(self._analysis_finished)
+        QThreadPool.globalInstance().start(self._analysis_job)
+
+    @Slot(object, object)
+    def _analysis_finished(self, analysis, error) -> None:
+        self._analysis_job = None
+        if self._closing:
+            return
+        self.run_analysis_button.setText("Run analysis")
+        self.update_analysis_button()
+        if error is None:
             self.analysis_window = AnalysisWindow(
-                question=self.post_analysis_request,
+                question=self._analysis_question,
                 result=analysis,
             )
             self.analysis_window.show()
             self.analysis_window.raise_()
             self.analysis_window.activateWindow()
-        except Exception as error:
+        else:
             QMessageBox.critical(
                 self,
                 "Analysis failed",
                 str(error),
             )
-        finally:
-            self.run_analysis_button.setText("Run analysis")
-            self.update_analysis_button()
+
+    def closeEvent(self, event) -> None:
+        # Let in-flight calls finish without opening windows or dialogs on close.
+        self._closing = True
+        super().closeEvent(event)
 
     def export_to_csv(self) -> None:
         if self.results.empty:
