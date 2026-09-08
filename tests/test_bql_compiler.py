@@ -1,6 +1,6 @@
 import pytest
 
-from server.bql_compiler import compile_query
+from server.bql_compiler import compile_query, get_result_columns, BQL_RESULT_COLUMNS
 from server.interpreter import interpret_request
 from shared.models import BondSearchQuery
 
@@ -10,7 +10,8 @@ def test_compiles_required_convertible_corporate_universe():
 
     assert bql == (
         "GET(LONG_COMP_NAME, CV_COMMON_TICKER_EXCH, INDUSTRY_SECTOR, "
-        "CRNCY, BB_COMPOSITE, PX_LAST, CV_CNVS_PX, CV_CNVS_RATIO, CPN, "
+        "CRNCY, AMT_OUTSTANDING, BB_COMPOSITE, PX_LAST, CV_CNVS_PX, "
+        "CV_CNVS_RATIO, PARITY, CV_PCT_PREMIUM, CPN, "
         "YIELD(YIELD_TYPE=YTM), MATURITY, DELTA, SECURITY_DES) "
         "FOR(filter(bondsuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
@@ -19,7 +20,24 @@ def test_compiles_required_convertible_corporate_universe():
     )
 
 
-def test_compiles_single_credit_rating():    
+@pytest.mark.parametrize("universe", ["high_yield", "convertible"])
+def test_result_columns_follow_bond_universe(universe):
+    query = BondSearchQuery.model_validate({"filters": [
+        {"field": "bond_universe", "operator": "equals", "value": universe},
+    ]})
+    excluded = {
+        "CV_COMMON_TICKER_EXCH", "CV_CNVS_PX", "CV_CNVS_RATIO",
+        "PARITY", "CV_PCT_PREMIUM",
+    }
+    expected = tuple(
+        column for column in BQL_RESULT_COLUMNS
+        if universe == "convertible" or column not in excluded
+    )
+    assert get_result_columns(query) == expected
+    assert compile_query(query).split(" FOR(")[0] == f"GET({', '.join(expected[1:])})"
+
+
+def test_compiles_single_credit_rating():
     query = interpret_request(
         "Show me convertible bonds rated BBB"
     )

@@ -24,17 +24,26 @@ BQL_RESULT_COLUMNS = (
     "CV_COMMON_TICKER_EXCH",
     "INDUSTRY_SECTOR",
     "CRNCY",
+    "AMT_OUTSTANDING",
     "BB_COMPOSITE",
     "PX_LAST",
     "CV_CNVS_PX",
     "CV_CNVS_RATIO",
+    "PARITY",
+    "CV_PCT_PREMIUM",
     "CPN",
     "YIELD(YIELD_TYPE=YTM)",
     "MATURITY",
     "DELTA",
     "SECURITY_DES",
 )
-BQL_GET_FIELDS = ", ".join(BQL_RESULT_COLUMNS[1:])
+HIGH_YIELD_EXCLUDED_COLUMNS = {
+    "CV_COMMON_TICKER_EXCH",
+    "CV_CNVS_PX",
+    "CV_CNVS_RATIO",
+    "PARITY",
+    "CV_PCT_PREMIUM",
+}
 HIGH_YIELD_RATINGS = (
     "BB+", "BB", "BB-", "B+", "B", "B-",
     "CCC+", "CCC", "CCC-", "CC", "C", "D",
@@ -92,6 +101,16 @@ def find_filter(
         ),
         None,
     )
+
+
+def get_result_columns(query: BondSearchQuery) -> tuple[str, ...]:
+    universe_filter = find_filter(query, SearchField.BOND_UNIVERSE)
+    if universe_filter is not None and str(universe_filter.value).casefold() == "high_yield":
+        return tuple(
+            column for column in BQL_RESULT_COLUMNS
+            if column not in HIGH_YIELD_EXCLUDED_COLUMNS
+        )
+    return BQL_RESULT_COLUMNS
 
 
 def compile_filter(search_filter: SearchFilter) -> str | None:
@@ -270,4 +289,5 @@ def compile_query(query: BondSearchQuery) -> str:
 
     # BQuery accepts GET/FOR syntax. This is equivalent to passing the
     # universe and requested field list to the Excel BQL function.
-    return f"GET({BQL_GET_FIELDS}) FOR({universe})"
+    get_fields = ", ".join(get_result_columns(query)[1:])
+    return f"GET({get_fields}) FOR({universe})"

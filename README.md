@@ -50,7 +50,7 @@ Start the desktop application:
 ## Using the application
 
 1. Enter a request and select **Interpret request**, or enter filters directly. For example: “Show me BBB-rated USD convertible bonds priced between 90 and 110, then rank the results by yield.”
-2. Review and edit the filters. Amount outstanding is expressed in USD millions and defaults to a minimum of 50. Date inputs use `YYYY-MM-DD`; percentage filters use percentage values.
+2. Review and edit the filters. Amount outstanding is expressed in USD millions and defaults to a minimum of 50. Date inputs use `MM-DD-YYYY`; percentage filters use percentage values.
 3. Select **Submit** to generate BQL and retrieve Bloomberg results. The generated query appears in the interface.
 4. Inspect the results, sort by column, or select **Open in new window**. Enter a CSV filename to export the results.
 5. Enter or edit the analysis instructions and select **Run analysis** after retrieving results.

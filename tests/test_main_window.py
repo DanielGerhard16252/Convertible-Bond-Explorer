@@ -219,16 +219,24 @@ def test_results_table_displays_prices_and_yields_to_three_decimals():
             "CV_CNVS_RATIO": [2.34567],
             "YIELD(YIELD_TYPE=YTM)": [4],
             "BENCHMARK_STRIKE_PX": [100.5555],
+            "PARITY": [95.1254],
+            "CV_PCT_PREMIUM": [6.4382],
+            "AMT_OUTSTANDING": [250000000],
         }),
     )
 
-    assert [table.item(0, column).text() for column in range(5)] == [
+    assert [table.item(0, column).text() for column in range(8)] == [
         "101.200",
         "98.765",
         "2.346",
         "4.000",
         "100.555",
+        "95.125",
+        "6.438",
+        "250000000",
     ]
+    assert table.horizontalHeaderItem(6).text() == "Conversion Premium (%)"
+    assert table.horizontalHeaderItem(7).text() == "Amount Outstanding"
     table.deleteLater()
     app.processEvents()
 

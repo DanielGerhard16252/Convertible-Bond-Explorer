@@ -23,6 +23,7 @@ BQL_COLUMN_MAP = {
     "maturity": "maturity",
     "crncy": "currency",
     "cnv_prem": "conversion_premium",
+    "cv_pct_premium": "conversion_premium",
     "delta": "delta",
     "yld_ytm_mid": "yield_to_maturity",
     "cntry_of_risk": "country",

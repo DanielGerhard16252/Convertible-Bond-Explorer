@@ -14,6 +14,8 @@ client = OpenAI()
 SYSTEM_PROMPT = """
 Translate the user's convertible-bond search request into the supplied schema.
 
+Web search can only be used when looking up the correct Bloomberg issuer name. 
+
 You must always return exactly twelve filters:
 
 1. credit_rating
@@ -270,7 +272,10 @@ Required structure:
 }
 
 Rules:
-
+- You must use the bloomberg issuer name when available. If the user provides a different name, you must map it to the correct Bloomberg issuer name. If you cannot find a mapping, use the name provided by the user.
+- Use web search to find the correct Bloomberg issuer name. Do not use web search for any other purpose.
+- Do not use web search if the user does not specify an issuer.
+- Do not invent an issuer.
 - The value must be one issuer name as a string or null.
 - Preserve the issuer name supplied by the user.
 - Never return a list or infer additional issuers.
@@ -384,6 +389,7 @@ def interpret_request_with_ai(text: str) -> BondSearchQuery:
             },
         ],
         text_format=BondSearchQuery,
+        tools=[{"type": "web_search"}],
     )
 
     if response.output_parsed is None:

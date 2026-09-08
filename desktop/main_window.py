@@ -35,7 +35,7 @@ from server.ai_interpreter import interpret_request_with_ai
 from desktop.background import BackgroundJob
 from server.ai_analysis import run_post_analysis
 from server.bloomberg_api import execute_bql
-from server.bql_compiler import BQL_RESULT_COLUMNS, compile_query
+from server.bql_compiler import compile_query, get_result_columns
 from server.benchmarks import get_benchmark_options
 from shared.models import (
     BondSearchQuery,
@@ -214,6 +214,9 @@ EUROPE_COUNTRY_CODES = [
 ]
 
 THREE_DECIMAL_COLUMNS = {
+    "parity",
+    "cv_pct_premium",
+    "conversion_premium",
     "price",
     "px_last",
     "conversion_price",
@@ -224,6 +227,12 @@ THREE_DECIMAL_COLUMNS = {
     "benchmark_strike_px",
     "yield_to_maturity",
     "yield(yield_type=ytm)",
+}
+
+RESULT_COLUMN_LABELS = {
+    "amt_outstanding": "Amount Outstanding",
+    "parity": "Parity",
+    "cv_pct_premium": "Conversion Premium (%)",
 }
 
 
@@ -380,7 +389,9 @@ def populate_results_table(
     table.setRowCount(len(dataframe))
     table.setColumnCount(len(dataframe.columns))
     table.setHorizontalHeaderLabels([
-        str(column).replace("_", " ").title()
+        RESULT_COLUMN_LABELS.get(
+            str(column).casefold(), str(column).replace("_", " ").title()
+        )
         for column in dataframe.columns
     ])
 
@@ -570,7 +581,7 @@ class MainWindow(QMainWindow):
         issuer_layout.addWidget(self.issuer_input)
         self.issuer_group.setLayout(issuer_layout)
 
-        self.maturity_group = QGroupBox("Maturity (YYYY-MM-DD)")
+        self.maturity_group = QGroupBox("Maturity (MM-DD-YYYY)")
         maturity_layout = QHBoxLayout()
         self.minimum_maturity = QLineEdit()
         self.minimum_maturity.setPlaceholderText("Min")
@@ -920,7 +931,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Invalid range value",
-                "Enter valid numbers and YYYY-MM-DD maturity dates.",
+                "Enter valid numbers and MM-DD-YYYY maturity dates.",
             )
             return
 
@@ -1054,7 +1065,7 @@ class MainWindow(QMainWindow):
             self.bql.setPlainText(self.bql_query)
             results = execute_bql(
                 self.bql_query,
-                requested_columns=BQL_RESULT_COLUMNS,
+                requested_columns=get_result_columns(query),
             )
             if self.get_benchmarks:
                 results = get_benchmark_options(results)
@@ -1114,7 +1125,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def parse_date(value: str) -> date | None:
         value = value.strip()
-        return date.fromisoformat(value) if value else None
+        return datetime.strptime(value, "%m-%d-%Y").date() if value else None
 
     def display_results(self, dataframe) -> None:
         populate_results_table(self.results_table, dataframe)
@@ -1295,9 +1306,9 @@ class MainWindow(QMainWindow):
                 value_range = search_filter.value
                 if value_range is not None and not isinstance(value_range, list):
                     if value_range.minimum is not None:
-                        self.minimum_maturity.setText(value_range.minimum.isoformat())
+                        self.minimum_maturity.setText(value_range.minimum.strftime("%m-%d-%Y"))
                     if value_range.maximum is not None:
-                        self.maximum_maturity.setText(value_range.maximum.isoformat())
+                        self.maximum_maturity.setText(value_range.maximum.strftime("%m-%d-%Y"))
                 continue
 
             analytics_key = {
