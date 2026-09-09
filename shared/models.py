@@ -10,6 +10,7 @@ class SearchField(str, Enum):
     PRICE = "price"
     COUPON = "coupon"
     ISSUER = "issuer"
+    ISIN = "isin"
     MATURITY = "maturity"
     CURRENCY = "currency"
     CONVERSION_PREMIUM = "conversion_premium"
@@ -91,10 +92,22 @@ class SearchFilter(BaseModel):
 
     @model_validator(mode="after")
     def validate_value_for_field(self):
+        if self.field == SearchField.ISIN and self.value is not None:
+            import re
+            if not isinstance(self.value, str):
+                raise ValueError("isin requires one 12-character ISIN")
+            self.value = self.value.strip().upper()
+            if not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", self.value):
+                raise ValueError("isin requires two letters, nine letters/digits, and a final digit")
         if self.field == SearchField.CREDIT_RATING and self.value is not None:
             if not isinstance(self.value, list):
                 raise ValueError("credit_rating requires a list")
             self.value = [CreditRating(rating) for rating in self.value]
+        elif self.field == SearchField.CURRENCY and self.value is not None:
+            values = self.value if isinstance(self.value, list) else str(self.value).split(",")
+            self.value = list(dict.fromkeys(str(value).strip().upper() for value in values if str(value).strip()))
+            if not self.value or any(len(code) != 3 or not code.isascii() or not code.isalpha() for code in self.value):
+                raise ValueError("currency requires three-letter codes, for example GBP, EUR, USD")
         elif self.field == SearchField.COUNTRY and self.value is not None:
             if not isinstance(self.value, list):
                 self.value = [str(self.value)]
@@ -162,3 +175,15 @@ class SearchFilter(BaseModel):
 class BondSearchQuery(BaseModel):
     filters: list[SearchFilter]
     post_analysis: str | None = None
+
+    def find_filter(self, field: SearchField) -> SearchFilter | None:
+        """Return the first populated filter for a field."""
+        return next(
+            (item for item in self.filters if item.field == field and item.value),
+            None,
+        )
+
+    @property
+    def universe(self) -> str:
+        selected = self.find_filter(SearchField.BOND_UNIVERSE)
+        return str(selected.value).casefold() if selected else "convertible"

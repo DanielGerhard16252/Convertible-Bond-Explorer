@@ -5,6 +5,17 @@ import pandas as pd
 import pytest
 
 from server.csv_provider import load_bond_data
+
+
+def test_filters_isin_without_matching_other_securities(tmp_path):
+    from shared.models import BondSearchQuery
+    path = tmp_path / "isin.csv"
+    pd.DataFrame({"bond_name": ["A", "B"], "rating": ["BBB", "BBB"],
+                  "price": [100, 100], "ID_ISIN": ["US0378331005", "US5949181045"]}).to_csv(path, index=False)
+    query = BondSearchQuery.model_validate({"filters": [
+        {"field": "isin", "operator": "equals", "value": "us0378331005"},
+    ]})
+    assert load_bond_data(query, path)["bond_name"].tolist() == ["A"]
 from shared.models import BondSearchQuery
 
 

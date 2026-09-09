@@ -1,6 +1,9 @@
 import pytest
 
-from server.bql_compiler import compile_query, get_result_columns, BQL_RESULT_COLUMNS
+from server.bql_compiler import (
+    compile_query, get_result_columns,
+    CONVERTIBLE_RESULT_COLUMNS, HIGH_YIELD_RESULT_COLUMNS,
+)
 from server.interpreter import interpret_request
 from shared.models import BondSearchQuery
 
@@ -9,10 +12,10 @@ def test_compiles_required_convertible_corporate_universe():
     bql = compile_query(BondSearchQuery(filters=[]))
 
     assert bql == (
-        "GET(LONG_COMP_NAME, CV_COMMON_TICKER_EXCH, INDUSTRY_SECTOR, "
-        "CRNCY, AMT_OUTSTANDING, BB_COMPOSITE, PX_LAST, CV_CNVS_PX, "
+        "GET(LONG_COMP_NAME, CV_COMMON_TICKER_EXCH, SECURITY_TYP, INDUSTRY_SECTOR, "
+        "CNTRY_OF_RISK, CRNCY, AMT_OUTSTANDING, BB_COMPOSITE, MATURITY, PX_LAST, CV_CNVS_PX, "
         "CV_CNVS_RATIO, PARITY, CV_PCT_PREMIUM, CPN, "
-        "YIELD(YIELD_TYPE=YTM), MATURITY, DELTA, SECURITY_DES) "
+        "YIELD(YIELD_TYPE=YTM), DELTA, SECURITY_DES) "
         "FOR(filter(bondsuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
         "(CONVERTIBLE == 'Y' AND SRCH_ASSET_CLASS == 'Corporates') AND "
@@ -25,13 +28,9 @@ def test_result_columns_follow_bond_universe(universe):
     query = BondSearchQuery.model_validate({"filters": [
         {"field": "bond_universe", "operator": "equals", "value": universe},
     ]})
-    excluded = {
-        "CV_COMMON_TICKER_EXCH", "CV_CNVS_PX", "CV_CNVS_RATIO",
-        "PARITY", "CV_PCT_PREMIUM",
-    }
-    expected = tuple(
-        column for column in BQL_RESULT_COLUMNS
-        if universe == "convertible" or column not in excluded
+    expected = (
+        CONVERTIBLE_RESULT_COLUMNS if universe == "convertible"
+        else HIGH_YIELD_RESULT_COLUMNS
     )
     assert get_result_columns(query) == expected
     assert compile_query(query).split(" FOR(")[0] == f"GET({', '.join(expected[1:])})"
@@ -204,7 +203,15 @@ def test_compiles_maturity_and_currency_filters():
     bql = compile_query(query)
     assert "MATURITY >= 2027-01-01" in bql
     assert "MATURITY <= 2030-12-31" in bql
-    assert "CRNCY == 'USD'" in bql
+    assert "CRNCY IN ['USD']" in bql
+
+
+@pytest.mark.parametrize("value", ["gbp, EUR, usd, GBP", ["GBP", "EUR", "USD"]])
+def test_compiles_multiple_currencies(value):
+    query = BondSearchQuery.model_validate({"filters": [
+        {"field": "currency", "operator": "in", "value": value},
+    ]})
+    assert "CRNCY IN ['GBP', 'EUR', 'USD']" in compile_query(query)
 
 
 def test_compiles_minimum_price():

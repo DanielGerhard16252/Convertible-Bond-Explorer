@@ -2,9 +2,83 @@ import sys
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from server.bloomberg_api import execute_bql
-from server.bql_compiler import BQL_RESULT_COLUMNS
+from server.bloomberg_api import assemble_search_results
+from server.bql_compiler import CONVERTIBLE_RESULT_COLUMNS
+
+
+def test_field_assembly_preserves_values_with_different_security_order():
+    import polars as pl
+    result = SimpleNamespace(names=["px_last()", "CPN"], dataframes=[
+        pl.DataFrame({"ID": ["A", "B"], "px_last()": [100., 90.]}),
+        pl.DataFrame({"ID": ["B", "A"], "CPN": [2., 5.]}),
+    ])
+    actual = assemble_search_results(result, ("ID", "PX_LAST", "CPN")).set_index("ID")
+    assert actual.loc["A"].to_dict() == {"PX_LAST": 100., "CPN": 5.}
+    assert actual.loc["B"].to_dict() == {"PX_LAST": 90., "CPN": 2.}
+
+
+@pytest.mark.parametrize("item_name,column_name", [
+    ("CV CNVS RATIO", "CV CNVS RATIO"),
+    ("CV_CNVS_RATIO", "cv cnvs ratio"),
+    ("cv cnvs ratio()", "CV_CNVS_RATIO"),
+])
+def test_field_assembly_accepts_spaces_in_bloomberg_names(item_name, column_name):
+    import polars as pl
+    result = SimpleNamespace(names=[item_name], dataframes=[
+        pl.DataFrame({"ID": ["bond-1"], column_name: [2.75]}),
+    ])
+    actual = assemble_search_results(result, ("ID", "CV_CNVS_RATIO"))
+    assert actual.to_dict("records") == [{"ID": "bond-1", "CV_CNVS_RATIO": 2.75}]
+
+
+def test_field_assembly_reports_missing_fields_and_upstream_nulls():
+    import polars as pl
+    result = SimpleNamespace(names=["PX_LAST"], dataframes=[
+        pl.DataFrame({"ID": ["A"], "PX_LAST": [None]}),
+    ])
+    with pytest.raises(ValueError, match="missing requested fields: CPN"):
+        assemble_search_results(result, ("ID", "PX_LAST", "CPN"))
+    with pytest.raises(ValueError, match="before merging"):
+        assemble_search_results(result, ("ID", "PX_LAST"))
+
+
+def test_search_joins_fields_by_id_despite_different_or_null_metadata(monkeypatch):
+    import polars as pl
+    from polars_bloomberg import BqlResult
+
+    raw = BqlResult([
+        pl.DataFrame({"ID": ["bond-1"], "LONG_COMP_NAME": ["Example"],
+                      "DATE": ["2026-09-07"], "CURRENCY": [None]},
+                     schema_overrides={"CURRENCY": pl.String}),
+        pl.DataFrame({"ID": ["bond-1"], "PX_LAST": [101.25],
+                      "DATE": ["2026-09-08"], "CURRENCY": ["USD"]}),
+        pl.DataFrame({"ID": ["bond-1"], "CPN": [3.5],
+                      "DATE": [None], "CURRENCY": [None]},
+                     schema_overrides={"DATE": pl.String, "CURRENCY": pl.String}),
+    ], ["LONG_COMP_NAME", "PX_LAST", "CPN"])
+    assert raw.combine().height == 3
+
+    class FakeBQuery:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bql(self, query):
+            return raw
+
+    monkeypatch.setitem(sys.modules, "polars_bloomberg", SimpleNamespace(BQuery=FakeBQuery))
+    result = execute_bql("GET(LONG_COMP_NAME, PX_LAST, CPN) FOR(BONDS)",
+                         requested_columns=("ID", "LONG_COMP_NAME", "PX_LAST", "CPN"))
+    assert "DATE" in result.columns
+    assert "CURRENCY" in result.columns
+    assert result[["ID", "LONG_COMP_NAME", "PX_LAST", "CPN"]].to_dict("records") == [
+        {"ID": "bond-1", "LONG_COMP_NAME": "Example", "PX_LAST": 101.25, "CPN": 3.5},
+    ]
 
 
 def test_execute_bql_submits_query_and_converts_combined_result(monkeypatch):
@@ -15,7 +89,7 @@ def test_execute_bql_submits_query_and_converts_combined_result(monkeypatch):
             return [{"ID": "XS0000000001 Corp", "PX_LAST": 101.25}]
 
     class BqlResult:
-        def combine(self):
+        def combine(self, **kwargs):
             return CombinedResult()
 
     class FakeBQuery:
@@ -44,13 +118,15 @@ def test_execute_bql_submits_query_and_converts_combined_result(monkeypatch):
     ]
 
 
-def test_execute_bql_keeps_only_requested_columns(monkeypatch):
+def test_execute_bql_retains_metadata_columns(monkeypatch):
     class CombinedResult:
         def to_dicts(self):
             return [{
                 "ID": "XS0000000001 Corp",
                 "PX_LAST": 101.25,
                 "CRNCY": "USD",
+                "SECURITY_TYP": "CORP",
+                "CNTRY_OF_RISK": "US",
                 "AMT_OUTSTANDING": 250000000,
                 "PARITY": 95.125,
                 "CV_PCT_PREMIUM": 6.438,
@@ -59,7 +135,8 @@ def test_execute_bql_keeps_only_requested_columns(monkeypatch):
             }]
 
     class BqlResult:
-        def combine(self):
+        def combine(self, on=None):
+            assert on == "ID"
             return CombinedResult()
 
     class FakeBQuery:
@@ -79,13 +156,14 @@ def test_execute_bql_keeps_only_requested_columns(monkeypatch):
     )
 
     result = execute_bql(
-        "GET(PX_LAST, CRNCY, AMT_OUTSTANDING, PARITY, CV_PCT_PREMIUM) FOR(BONDS)",
-        requested_columns=BQL_RESULT_COLUMNS,
+        "GET(SECURITY_TYP, CNTRY_OF_RISK, PX_LAST, CRNCY, AMT_OUTSTANDING, PARITY, CV_PCT_PREMIUM) FOR(BONDS)",
+        requested_columns=("ID", "SECURITY_TYP", "CNTRY_OF_RISK", "CRNCY",
+                           "AMT_OUTSTANDING", "PX_LAST", "PARITY", "CV_PCT_PREMIUM"),
     )
 
-    assert result.columns.tolist() == [
-        "ID", "CRNCY", "AMT_OUTSTANDING", "PX_LAST", "PARITY", "CV_PCT_PREMIUM",
-    ]
+    assert result.to_dict("records") == CombinedResult().to_dicts()
+    assert result.iloc[0]["SECURITY_TYP"] == "CORP"
+    assert result.iloc[0]["CNTRY_OF_RISK"] == "US"
     assert result.iloc[0]["AMT_OUTSTANDING"] == 250000000
     assert result.iloc[0]["PARITY"] == 95.125
     assert result.iloc[0]["CV_PCT_PREMIUM"] == 6.438

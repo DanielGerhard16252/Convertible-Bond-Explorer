@@ -1,10 +1,8 @@
 from PySide6.QtWidgets import (
     QComboBox,
     QCheckBox,
-    QAbstractItemView,
     QFrame,
     QGridLayout,
-    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -15,21 +13,17 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QTableWidget, 
-    QTableWidgetItem,
     QGroupBox,
-    QTextBrowser,
 )
-from PySide6.QtCore import QLocale, Qt, Signal, Slot, QThreadPool
+from PySide6.QtCore import QLocale, Qt, Slot, QThreadPool
 from PySide6.QtGui import (
     QDoubleValidator,
-    QKeyEvent,
     QStandardItem,
     QStandardItemModel,
 )
 
 import pandas as pd
 from datetime import date, datetime
-from numbers import Real
 
 from server.ai_interpreter import interpret_request_with_ai
 from desktop.background import BackgroundJob
@@ -49,390 +43,22 @@ from shared.models import (
 )
 
 
-APP_STYLESHEET = """
-QMainWindow, QWidget {
-    background-color: #f3f6fb;
-    color: #172033;
-    font-family: "Segoe UI";
-    font-size: 12px;
-}
-
-QLabel#pageTitle {
-    color: #102a56;
-    font-size: 21px;
-    font-weight: 700;
-}
-
-QLabel#pageSubtitle, QLabel#mutedLabel {
-    color: #64748b;
-}
-
-QLabel#pageSubtitle {
-    font-size: 12px;
-    margin-bottom: 2px;
-}
-
-QLabel#sectionLabel {
-    color: #173c78;
-    font-size: 13px;
-    font-weight: 650;
-}
-
-QFrame#card {
-    background-color: #ffffff;
-    border: 1px solid #dce5f2;
-    border-radius: 12px;
-}
-
-QGroupBox {
-    background-color: #ffffff;
-    border: 1px solid #dce5f2;
-    border-radius: 9px;
-    font-weight: 600;
-    margin-top: 7px;
-    padding: 8px 6px 5px 6px;
-}
-
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 11px;
-    padding: 0 5px;
-    color: #334e75;
-    background-color: #f3f6fb;
-}
-
-QGroupBox:disabled {
-    background-color: #e5e9ef;
-    border-color: #cbd2dc;
-    color: #8b96a8;
-}
-
-QGroupBox::title:disabled {
-    color: #8b96a8;
-    background-color: #f3f6fb;
-}
-
-QLineEdit, QPlainTextEdit, QTextBrowser, QComboBox {
-    background-color: #f8fafc;
-    border: 1px solid #cbd7e6;
-    border-radius: 7px;
-    padding: 4px 7px;
-    selection-background-color: #2f6fed;
-    selection-color: #ffffff;
-}
-
-QLineEdit:focus, QPlainTextEdit:focus, QTextBrowser:focus, QComboBox:focus {
-    background-color: #ffffff;
-    border: 2px solid #4381ee;
-}
-
-QPushButton {
-    min-height: 18px;
-    background-color: #e8eef8;
-    color: #214578;
-    border: 1px solid #c9d7eb;
-    border-radius: 7px;
-    padding: 5px 12px;
-    font-weight: 600;
-}
-
-QPushButton:hover {
-    background-color: #dbe7f8;
-    border-color: #9fb9df;
-}
-
-QPushButton:pressed {
-    background-color: #c9daf3;
-}
-
-QPushButton:disabled {
-    color: #94a3b8;
-    background-color: #edf1f6;
-    border-color: #dce3eb;
-}
-
-QPushButton#primaryButton {
-    min-width: 130px;
-    background-color: #2563d8;
-    color: #ffffff;
-    border-color: #2563d8;
-}
-
-QPushButton#primaryButton:hover {
-    background-color: #1d55bf;
-    border-color: #1d55bf;
-}
-
-QTableWidget {
-    background-color: #ffffff;
-    alternate-background-color: #f7f9fc;
-    border: 1px solid #dce5f2;
-    border-radius: 9px;
-    gridline-color: transparent;
-    selection-background-color: #dbeafe;
-    selection-color: #153868;
-    outline: none;
-}
-
-QTableWidget::item {
-    padding: 4px 7px;
-    border-bottom: 1px solid #edf2f7;
-}
-
-QHeaderView::section {
-    background-color: #173c78;
-    color: #ffffff;
-    border: none;
-    border-right: 1px solid #31558d;
-    padding: 6px;
-    font-weight: 600;
-}
-
-QScrollBar:vertical {
-    background: #edf2f7;
-    width: 11px;
-    margin: 0;
-}
-
-QScrollBar::handle:vertical {
-    background: #a9bad0;
-    border-radius: 5px;
-    min-height: 28px;
-}
-
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-    height: 0;
-}
-"""
-
-EUROPE_COUNTRY_CODES = [
-    "AL", "AD", "AT", "BY", "BE", "BA", "BG", "HR", "CY", "CZ",
-    "DK", "EE", "FI", "FR", "DE", "GR", "HU", "IS", "IE", "IT",
-    "LV", "LI", "LT", "LU", "MT", "MD", "MC", "ME", "NL", "MK",
-    "NO", "PL", "PT", "RO", "RU", "SM", "RS", "SK", "SI", "ES",
-    "SE", "CH", "UA", "GB", "VA",
-]
-
-THREE_DECIMAL_COLUMNS = {
-    "parity",
-    "cv_pct_premium",
-    "conversion_premium",
-    "price",
-    "px_last",
-    "conversion_price",
-    "cv_cnvs_px",
-    "conversion_ratio",
-    "cv_cnvs_ratio",
-    "strike_px",
-    "benchmark_strike_px",
-    "yield_to_maturity",
-    "yield(yield_type=ytm)",
-}
-
-RESULT_COLUMN_LABELS = {
-    "amt_outstanding": "Amount Outstanding",
-    "parity": "Parity",
-    "cv_pct_premium": "Conversion Premium (%)",
-}
+from desktop.styles import APP_STYLESHEET
+from desktop.widgets import CheckableComboBox, RequestInput
+from desktop.results import (
+    AnalysisWindow, ResultsWindow, configure_results_table, populate_results_table,
+)
+from shared.countries import EUROPE_COUNTRY_CODES
 
 
-class CheckableComboBox(QComboBox):
-    def __init__(self) -> None:
-        super().__init__()
-        self.setEditable(False)
-        self.setPlaceholderText("Select credit ratings")
-        self.setCurrentIndex(-1)
-        self.view().pressed.connect(self.toggle_item)
-
-    def toggle_item(self, index) -> None:
-        item = self.model().itemFromIndex(index)
-        checked = item.checkState() == Qt.CheckState.Checked
-        item.setCheckState(
-            Qt.CheckState.Unchecked
-            if checked
-            else Qt.CheckState.Checked
-        )
-        self.setCurrentIndex(-1)
-
-
-class RequestInput(QPlainTextEdit):
-    submitted = Signal()
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        is_enter = event.key() in (
-            Qt.Key.Key_Return,
-            Qt.Key.Key_Enter,
-        )
-        is_multiline = bool(
-            event.modifiers() & Qt.KeyboardModifier.ShiftModifier
-        )
-
-        if is_enter and not is_multiline:
-            self.submitted.emit()
-            event.accept()
-            return
-
-        super().keyPressEvent(event)
-
-
-class SortableTableItem(QTableWidgetItem):
-    def __init__(self, value, display_value: str | None = None) -> None:
-        super().__init__(display_value if display_value is not None else str(value))
-        self.sort_value = self.normalized_sort_value(value)
-
-    @staticmethod
-    def normalized_sort_value(value) -> tuple[int, object]:
-        if isinstance(value, Real) and not isinstance(value, bool):
-            return (0, float(value))
-        if isinstance(value, (date, datetime, pd.Timestamp)):
-            return (1, pd.Timestamp(value).value)
-        return (2, str(value).casefold())
-
-    def __lt__(self, other: QTableWidgetItem) -> bool:
-        if isinstance(other, SortableTableItem):
-            return self.sort_value < other.sort_value
-        return super().__lt__(other)
-
-
-class ResultsWindow(QMainWindow):
-    def __init__(
-        self,
-        dataframe: pd.DataFrame,
-        window_title: str = "Convertible Bond Search Results",
-        heading: str = "Search results",
-    ) -> None:
-        super().__init__()
-        self.setWindowTitle(window_title)
-        self.resize(1200, 700)
-        self.setStyleSheet(APP_STYLESHEET)
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(12)
-
-        title = QLabel(heading)
-        title.setObjectName("pageTitle")
-        count = len(dataframe)
-        summary = QLabel(
-            f"{count:,} {'result' if count == 1 else 'results'}"
-        )
-        summary.setObjectName("mutedLabel")
-
-        table = QTableWidget()
-        configure_results_table(table)
-        populate_results_table(table, dataframe)
-
-        layout.addWidget(title)
-        layout.addWidget(summary)
-        layout.addWidget(table, 1)
-        self.setCentralWidget(container)
-
-
-class AnalysisWindow(QMainWindow):
-    def __init__(self, question: str, result: str) -> None:
-        super().__init__()
-        self.setWindowTitle("AI Post Analysis")
-        self.resize(800, 600)
-        self.setStyleSheet(APP_STYLESHEET)
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(12)
-
-        title = QLabel("AI post analysis")
-        title.setObjectName("pageTitle")
-        question_heading = QLabel("Question")
-        question_heading.setObjectName("sectionLabel")
-        self.question_label = QLabel(question)
-        self.question_label.setWordWrap(True)
-
-        result_heading = QLabel("Answer")
-        result_heading.setObjectName("sectionLabel")
-        self.result_text = QTextBrowser()
-        self.result_text.setMarkdown(result)
-        self.result_text.setOpenExternalLinks(True)
-
-        layout.addWidget(title)
-        layout.addWidget(question_heading)
-        layout.addWidget(self.question_label)
-        layout.addWidget(result_heading)
-        layout.addWidget(self.result_text, 1)
-        self.setCentralWidget(container)
-
-
-def configure_results_table(table: QTableWidget) -> None:
-    table.setAlternatingRowColors(True)
-    table.setSortingEnabled(True)
-    table.setShowGrid(False)
-    table.setSelectionBehavior(
-        QAbstractItemView.SelectionBehavior.SelectRows
-    )
-    table.setSelectionMode(
-        QAbstractItemView.SelectionMode.SingleSelection
-    )
-    table.verticalHeader().setVisible(False)
-    table.verticalHeader().setDefaultSectionSize(34)
-    table.horizontalHeader().setSectionResizeMode(
-        QHeaderView.ResizeMode.ResizeToContents
-    )
-    table.horizontalHeader().setStretchLastSection(True)
-
-
-def populate_results_table(
-    table: QTableWidget,
-    dataframe: pd.DataFrame,
-) -> None:
-    table.setSortingEnabled(False)
-    table.clear()
-    table.setRowCount(len(dataframe))
-    table.setColumnCount(len(dataframe.columns))
-    table.setHorizontalHeaderLabels([
-        RESULT_COLUMN_LABELS.get(
-            str(column).casefold(), str(column).replace("_", " ").title()
-        )
-        for column in dataframe.columns
-    ])
-
-    for row_number, row in enumerate(
-        dataframe.itertuples(index=False, name=None)
-    ):
-        for column_number, value in enumerate(row):
-            column = str(dataframe.columns[column_number])
-            table.setItem(
-                row_number,
-                column_number,
-                SortableTableItem(
-                    value,
-                    format_table_value(column, value),
-                ),
-            )
-
-    table.resizeColumnsToContents()
-    table.setSortingEnabled(True)
-
-
-def format_table_value(column: str, value) -> str:
-    if pd.isna(value):
-        return str(value)
-
-    normalized_column = column.casefold()
-    if normalized_column in THREE_DECIMAL_COLUMNS:
-        try:
-            return f"{float(value):.3f}"
-        except (TypeError, ValueError):
-            return str(value)
-
-    if normalized_column != "maturity":
-        return str(value)
-
-    maturity = pd.to_datetime(value, errors="coerce")
-    return (
-        str(value)
-        if pd.isna(maturity)
-        else maturity.strftime("%m-%d-%Y")
-    )
+def retrieve_search_results(bql_query, requested_columns, include_benchmarks, universe):
+    """Perform blocking Bloomberg calls without accessing UI widgets."""
+    results = execute_bql(bql_query, requested_columns=requested_columns)
+    if include_benchmarks:
+        results = get_benchmark_options(results)
+    results.attrs["bond_universe"] = universe
+    results.attrs["include_benchmarks"] = include_benchmarks
+    return results
 
 
 class MainWindow(QMainWindow):
@@ -440,11 +66,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.results = pd.DataFrame()
         self._interpret_job = None
+        self._search_job = None
         self._analysis_job = None
         self._analysis_question = ""
         self._closing = False
         self.results_window: ResultsWindow | None = None
         self.analysis_window: AnalysisWindow | None = None
+        self._analysis_windows = set()
         self.bql_query = ""
         self.post_analysis_request: str | None = None
         self.setWindowTitle("Convertible Bond Explorer")
@@ -454,6 +82,10 @@ class MainWindow(QMainWindow):
 
         self.get_benchmarks = False
 
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        """Construct and connect the search controls."""
         self.request_input = RequestInput()
         self.request_input.setPlaceholderText(
             "Example: Show me BBB-rated convertible bonds"
@@ -469,16 +101,8 @@ class MainWindow(QMainWindow):
         self.request_input.submitted.connect(
             self.interpret_request
         )
-        self.bql = QPlainTextEdit()
-        self.bql.setReadOnly(True)
-        self.bql.setMaximumHeight(58)
-        self.bql.setPlaceholderText("BQL will appear after submitting a search")
-        self.bql.setToolTip(
-            "The generated query submitted to Bloomberg BQL."
-        )
-        self.bql.setStyleSheet('font-family: Consolas, "Courier New";')
-
-        self.post_analysis = QPlainTextEdit()
+        self.post_analysis = RequestInput()
+        self.post_analysis.submitted.connect(self.run_analysis)
         self.post_analysis.setMaximumHeight(58)
         self.post_analysis.setPlaceholderText(
             "Enter post-analysis instructions or use AI assisted search"
@@ -580,6 +204,11 @@ class MainWindow(QMainWindow):
         self.issuer_input.setPlaceholderText("Issuer name")
         issuer_layout.addWidget(self.issuer_input)
         self.issuer_group.setLayout(issuer_layout)
+        self.isin_group = QGroupBox("ISIN")
+        isin_layout = QHBoxLayout(self.isin_group)
+        self.isin_input = QLineEdit()
+        self.isin_input.setPlaceholderText("12-character ISIN")
+        isin_layout.addWidget(self.isin_input)
 
         self.maturity_group = QGroupBox("Maturity (MM-DD-YYYY)")
         maturity_layout = QHBoxLayout()
@@ -594,7 +223,7 @@ class MainWindow(QMainWindow):
         self.currency_group = QGroupBox("Currency")
         currency_layout = QHBoxLayout()
         self.currency_input = QLineEdit()
-        self.currency_input.setPlaceholderText("USD")
+        self.currency_input.setPlaceholderText("GBP, EUR, USD")
         currency_layout.addWidget(self.currency_input)
         self.currency_group.setLayout(currency_layout)
 
@@ -680,6 +309,11 @@ class MainWindow(QMainWindow):
         self.submit_button = QPushButton("Submit")
         self.submit_button.setObjectName("primaryButton")
         self.submit_button.clicked.connect(self.submit_search)
+        self.reset_filters_button = QPushButton("Reset filters")
+        self.reset_filters_button.setToolTip(
+            "Restore default filters (Convertible, minimum USD 50 MM outstanding)."
+        )
+        self.reset_filters_button.clicked.connect(self.reset_filters)
 
         layout = QVBoxLayout()
         layout.setContentsMargins(20, 16, 20, 16)
@@ -730,28 +364,14 @@ class MainWindow(QMainWindow):
         for column in range(5):
             filter_grid.setColumnStretch(column, 1)
         layout.addLayout(filter_grid)
+        filter_grid.addWidget(self.isin_group, 2, 3)
 
         submit_row = QHBoxLayout()
         submit_row.addWidget(self.get_benchmarks_checkbox)
         submit_row.addStretch()
+        submit_row.addWidget(self.reset_filters_button)
         submit_row.addWidget(self.submit_button)
         layout.addLayout(submit_row)
-
-        previews = QGridLayout()
-        previews.setSpacing(8)
-        previews.addWidget(self.section_label("Generated BQL"), 0, 0)
-        previews.addWidget(self.section_label("AI Post-analysis prompt"), 0, 1)
-        previews.addWidget(self.bql, 1, 0)
-        previews.addWidget(self.post_analysis, 1, 1)
-        previews.addWidget(
-            self.run_analysis_button,
-            2,
-            1,
-            alignment=Qt.AlignmentFlag.AlignRight,
-        )
-        previews.setColumnStretch(0, 1)
-        previews.setColumnStretch(1, 1)
-        layout.addLayout(previews)
 
         results_header = QHBoxLayout()
         results_header.addWidget(self.section_label("Search results"))
@@ -769,6 +389,13 @@ class MainWindow(QMainWindow):
         export_row.addWidget(self.export_csv)
         layout.addLayout(export_row)
 
+        layout.addWidget(self.section_label("AI analysis"))
+        layout.addWidget(self.post_analysis)
+        layout.addWidget(
+            self.run_analysis_button,
+            alignment=Qt.AlignmentFlag.AlignRight,
+        )
+
         container = QWidget()
         container.setLayout(layout)
 
@@ -779,6 +406,12 @@ class MainWindow(QMainWindow):
         label = QLabel(text)
         label.setObjectName("sectionLabel")
         return label
+
+    def reset_filters(self) -> None:
+        self.display_query_in_controls(BondSearchQuery(
+            filters=[], post_analysis=self.post_analysis.toPlainText(),
+        ))
+        self.get_benchmarks_checkbox.setChecked(False)
 
     def update_universe_dependent_filters(
         self,
@@ -903,7 +536,8 @@ class MainWindow(QMainWindow):
         else:
             self.display_query_in_controls(query)
 
-    def submit_search(self) -> None:
+    def query_from_controls(self) -> BondSearchQuery | None:
+        """Validate the search form and construct its typed query."""
         selected_ratings = [
             rating
             for rating, item in self.rating_items.items()
@@ -949,7 +583,20 @@ class MainWindow(QMainWindow):
             else None
         )
         issuer = self.issuer_input.text().strip() or None
+        try:
+            isin_filter = SearchFilter(field=SearchField.ISIN,
+                                       operator=SearchOperator.EQUALS,
+                                       value=self.isin_input.text().strip() or None)
+        except ValueError as error:
+            QMessageBox.warning(self, "Invalid ISIN", str(error))
+            return
         currency = self.currency_input.text().strip().upper() or None
+        try:
+            currency = SearchFilter(field=SearchField.CURRENCY,
+                                    operator=SearchOperator.IN, value=currency).value
+        except ValueError as error:
+            QMessageBox.warning(self, "Invalid currency", str(error))
+            return
         country_name = self.country_input.text().strip()
         try:
             countries = self.countries_to_iso_codes(country_name)
@@ -1010,6 +657,7 @@ class MainWindow(QMainWindow):
         query = BondSearchQuery(
             post_analysis=self.post_analysis_request,
             filters=[
+                isin_filter,
                 SearchFilter(
                     field=SearchField.CREDIT_RATING,
                     operator=SearchOperator.IN,
@@ -1034,7 +682,7 @@ class MainWindow(QMainWindow):
                              operator=SearchOperator.BETWEEN,
                              value=maturity_range),
                 SearchFilter(field=SearchField.CURRENCY,
-                             operator=SearchOperator.EQUALS,
+                             operator=SearchOperator.IN,
                              value=currency),
                 SearchFilter(field=SearchField.CONVERSION_PREMIUM,
                              operator=SearchOperator.BETWEEN,
@@ -1057,26 +705,43 @@ class MainWindow(QMainWindow):
             ]
         )
 
+        return query
+
+    def submit_search(self) -> None:
+        if self._search_job is not None or self._closing:
+            return
+        query = self.query_from_controls()
+        if query is None:
+            return
+        try:
+            self._pending_bql = compile_query(query)
+            print(f"Generated BQL:\n{self._pending_bql}", flush=True)
+        except Exception as error:
+            QMessageBox.critical(self, "Search failed", str(error))
+            return
+        self._search_job = BackgroundJob(
+            retrieve_search_results, self._pending_bql, get_result_columns(query),
+            self.get_benchmarks, query.universe,
+        )
+        self._search_job.signals.completed.connect(self._search_finished)
         self.submit_button.setEnabled(False)
         self.submit_button.setText("Submitting...")
+        QThreadPool.globalInstance().start(self._search_job)
 
+    @Slot(object, object)
+    def _search_finished(self, results, error) -> None:
+        self._search_job = None
+        if self._closing:
+            return
         try:
-            self.bql_query = compile_query(query)
-            self.bql.setPlainText(self.bql_query)
-            results = execute_bql(
-                self.bql_query,
-                requested_columns=get_result_columns(query),
-            )
-            if self.get_benchmarks:
-                results = get_benchmark_options(results)
-            self.results = results
+            if error is not None:
+                raise RuntimeError(error)
             self.display_results(results)
+            self.results = results
+            self.bql_query = self._pending_bql
+            self.update_analysis_button()
         except Exception as error:
-            QMessageBox.critical(
-                self,
-                "Search failed",
-                str(error),
-            )
+            QMessageBox.critical(self, "Search failed", str(error))
         finally:
             self.submit_button.setEnabled(True)
             self.submit_button.setText("Submit")
@@ -1163,11 +828,13 @@ class MainWindow(QMainWindow):
         self.run_analysis_button.setEnabled(False)
         self.run_analysis_button.setText("Analysing...")
         self._analysis_question = self.post_analysis_request
+        self._analysis_dataset = self.results.copy(deep=True)
+        self._analysis_bql = self.bql_query
         self._analysis_job = BackgroundJob(
             run_post_analysis,
             self._analysis_question,
-            self.results.copy(deep=True),
-            self.bql_query,
+            self._analysis_dataset,
+            self._analysis_bql,
         )
         self._analysis_job.signals.completed.connect(self._analysis_finished)
         QThreadPool.globalInstance().start(self._analysis_job)
@@ -1183,7 +850,11 @@ class MainWindow(QMainWindow):
             self.analysis_window = AnalysisWindow(
                 question=self._analysis_question,
                 result=analysis,
+                dataset=self._analysis_dataset,
+                bql_query=self._analysis_bql,
             )
+            self._analysis_windows.add(self.analysis_window)
+            self.analysis_window.closed.connect(self._analysis_windows.discard)
             self.analysis_window.show()
             self.analysis_window.raise_()
             self.analysis_window.activateWindow()
@@ -1193,6 +864,9 @@ class MainWindow(QMainWindow):
                 "Analysis failed",
                 str(error),
             )
+        self._analysis_dataset = None
+        self._analysis_bql = ""
+        self._analysis_question = ""
 
     def closeEvent(self, event) -> None:
         # Let in-flight calls finish without opening windows or dialogs on close.
@@ -1251,6 +925,7 @@ class MainWindow(QMainWindow):
         self.minimum_coupon.clear()
         self.maximum_coupon.clear()
         self.issuer_input.clear()
+        self.isin_input.clear()
         self.minimum_maturity.clear()
         self.maximum_maturity.clear()
         self.currency_input.clear()
@@ -1298,7 +973,9 @@ class MainWindow(QMainWindow):
                 continue
 
             if search_filter.field == SearchField.CURRENCY:
-                if isinstance(search_filter.value, str):
+                if isinstance(search_filter.value, list):
+                    self.currency_input.setText(", ".join(search_filter.value))
+                elif isinstance(search_filter.value, str):
                     self.currency_input.setText(search_filter.value)
                 continue
 
@@ -1328,6 +1005,10 @@ class MainWindow(QMainWindow):
             if search_filter.field == SearchField.ISSUER:
                 if isinstance(search_filter.value, str):
                     self.issuer_input.setText(search_filter.value)
+            if search_filter.field == SearchField.ISIN:
+                if isinstance(search_filter.value, str):
+                    self.isin_input.setText(search_filter.value)
+                continue
                 continue
 
             if search_filter.field == SearchField.COUPON:

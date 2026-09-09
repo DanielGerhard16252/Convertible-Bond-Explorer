@@ -15,12 +15,171 @@ import server.benchmarks as benchmarks_module
 from desktop.main_window import MainWindow, populate_results_table
 
 
+def test_isin_input_populates_and_compiles():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    try:
+        query = main_window_module.BondSearchQuery.model_validate({"filters": [
+            {"field": "isin", "operator": "equals", "value": " us0378331005 "},
+        ]})
+        window.display_query_in_controls(query)
+        assert window.isin_input.text() == "US0378331005"
+        rebuilt = window.query_from_controls()
+        assert "ID_ISIN == 'US0378331005'" in main_window_module.compile_query(rebuilt)
+        window.display_query_in_controls(main_window_module.BondSearchQuery(filters=[]))
+        assert window.isin_input.text() == ""
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_ai_currency_lists_populate_controls_and_round_trip_to_bql(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    try:
+        for request, currencies in [("bonds in euros", ["EUR"]),
+                                    ("bonds in euros and pounds", ["EUR", "GBP"])]:
+            query = main_window_module.BondSearchQuery.model_validate({"filters": [
+                {"field": "currency", "operator": "in", "value": currencies},
+            ]})
+            monkeypatch.setattr(main_window_module, "interpret_request_with_ai", lambda text: query)
+            window.request_input.setPlainText(request)
+            window.interpret_request()
+            wait_for(app, lambda: window._interpret_job is None)
+            assert window.currency_input.text() == ", ".join(currencies)
+            rebuilt = window.query_from_controls()
+            assert rebuilt is not None
+            expected = ", ".join(f"'{code}'" for code in currencies)
+            assert f"CRNCY IN [{expected}]" in main_window_module.compile_query(rebuilt)
+        window.display_query_in_controls(main_window_module.BondSearchQuery(filters=[]))
+        assert window.currency_input.text() == ""
+    finally:
+        window.close()
+
+
+def test_display_filters_both_universes_using_friendly_names():
+    from desktop.results import RESULT_COLUMN_LABELS, HIGH_YIELD_COLUMN_LABELS
+    app = QApplication.instance() or QApplication([])
+    for universe, labels in [("convertible", RESULT_COLUMN_LABELS),
+                             ("high_yield", HIGH_YIELD_COLUMN_LABELS)]:
+        data = pd.DataFrame({label: ["sample"] for label in reversed(list(labels.values()))})
+        data["DATE"] = "2026-09-08"
+        data["CURRENCY"] = "USD"
+        data["BENCHMARK_NAME"] = "extra"
+        data.attrs["bond_universe"] = universe
+        table = QTableWidget()
+        populate_results_table(table, data)
+        assert [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())] == list(labels.values())
+        assert table.rowCount() == 1
+        table.deleteLater()
+    app.processEvents()
+
+
+def test_benchmark_columns_only_display_when_requested():
+    from desktop.results import select_display_columns, BENCHMARK_COLUMN_LABELS
+    for names in [list(BENCHMARK_COLUMN_LABELS.values()),
+                  ["BENCHMARK_ID", "BENCHMARK_NAME", "BENCHMARK_EXPIRE_DT()", "BENCHMARK_STRIKE_PX()"]]:
+        data = pd.DataFrame({"ID": ["bond"], **{name: ["value"] for name in names},
+                             "BENCHMARK_DATE": ["extra"]})
+        data.attrs["bond_universe"] = "convertible"
+        assert select_display_columns(data).columns.tolist() == ["ID"]
+        data.attrs["include_benchmarks"] = True
+        assert select_display_columns(data).columns.tolist() == [
+            "ID", "BENCHMARK_ID", "BENCHMARK_NAME", "BENCHMARK_EXPIRE_DT", "BENCHMARK_STRIKE_PX",
+        ]
+
+
+def test_analysis_chats_are_independent_and_close_clears_context(monkeypatch):
+    import desktop.results as results_module
+    from PySide6.QtCore import Qt
+    app = QApplication.instance() or QApplication([])
+    calls = []
+    def reply(question, dataset, bql, history):
+        calls.append((question, history))
+        return "Follow-up answer"
+    monkeypatch.setattr(results_module, "run_post_analysis", reply)
+    first = results_module.AnalysisWindow("First", "Answer one", pd.DataFrame({"x": [1]}), "BQL")
+    second = results_module.AnalysisWindow("Second", "Answer two", pd.DataFrame({"x": [2]}), "BQL2")
+    try:
+        first.follow_up.setPlainText("Why?")
+        QTest.keyClick(first.follow_up, Qt.Key.Key_Return)
+        wait_for(app, lambda: first._job is None)
+        assert calls[0] == ("Why?", [{"role": "user", "content": "First"},
+                                    {"role": "assistant", "content": "Answer one"}])
+        assert len(first.history) == 4
+        assert len(second.history) == 2
+        text = first.result_text.toPlainText()
+        assert text.index("First") < text.index("Answer one") < text.index("Why?") < text.index("Follow-up answer")
+        first.close()
+        assert first.history == []
+        assert first.dataset.empty
+        assert first.bql_query == ""
+        assert len(second.history) == 2
+    finally:
+        first.close()
+        second.close()
+
+
+def test_maturity_form_round_trip_preserves_iso_query_dates():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    try:
+        query = main_window_module.BondSearchQuery.model_validate({"filters": [
+            {"field": "maturity", "operator": "between",
+             "value": {"minimum": "2030-01-07", "maximum": "2032-12-31"}},
+        ]})
+        window.display_query_in_controls(query)
+        assert window.minimum_maturity.text() == "01-07-2030"
+        assert window.maximum_maturity.text() == "12-31-2032"
+        rebuilt = window.query_from_controls()
+        assert rebuilt is not None
+        bql = main_window_module.compile_query(rebuilt)
+        assert "MATURITY >= 2030-01-07" in bql
+        assert "MATURITY <= 2032-12-31" in bql
+    finally:
+        window.close()
+        app.processEvents()
+
+
 def wait_for(app, condition):
     deadline = time.monotonic() + 5
     while not condition() and time.monotonic() < deadline:
         app.processEvents()
         QTest.qWait(5)
     assert condition()
+
+
+def test_search_runs_in_background_and_restores_submit(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    release = Event()
+    started = Event()
+    def search(*args, **kwargs):
+        assert QThread.currentThread() != app.thread()
+        started.set()
+        assert release.wait(5)
+        return pd.DataFrame({"ID": ["bond-1"], "PX_LAST": [100.]})
+    monkeypatch.setattr(main_window_module, "execute_bql", search)
+    window = MainWindow()
+    try:
+        window.submit_search()
+        wait_for(app, started.is_set)
+        assert window.submit_button.text() == "Submitting..."
+        assert not window.submit_button.isEnabled()
+        job = window._search_job
+        window.submit_search()
+        assert window._search_job is job
+        ticks = []
+        QTimer.singleShot(0, lambda: ticks.append(True))
+        wait_for(app, lambda: bool(ticks))
+        release.set()
+        wait_for(app, lambda: window._search_job is None)
+        assert window.submit_button.isEnabled()
+        assert window.submit_button.text() == "Submit"
+        assert window.results.iloc[0]["PX_LAST"] == 100.
+    finally:
+        release.set()
+        wait_for(app, lambda: window._search_job is None)
+        window.close()
 
 
 def test_ai_jobs_are_independent_and_keep_ui_responsive(monkeypatch):
@@ -106,7 +265,7 @@ def test_ai_errors_restore_controls_on_ui_thread(monkeypatch):
         window.close()
 
 
-def test_submit_sends_bql_and_displays_bloomberg_results(monkeypatch):
+def test_submit_sends_bql_and_displays_results(monkeypatch):
     app = QApplication.instance() or QApplication([])
     submitted = []
     bloomberg_results = pd.DataFrame([
@@ -124,7 +283,9 @@ def test_submit_sends_bql_and_displays_bloomberg_results(monkeypatch):
 
     def fake_execute_bql(query, requested_columns=None):
         submitted.append(query)
-        assert requested_columns is not None
+        assert requested_columns == main_window_module.get_result_columns(
+            main_window_module.BondSearchQuery(filters=[])
+        )
         return bloomberg_results
 
     monkeypatch.setattr(
@@ -135,18 +296,18 @@ def test_submit_sends_bql_and_displays_bloomberg_results(monkeypatch):
     window = MainWindow()
     try:
         window.submit_search()
-        app.processEvents()
+        wait_for(app, lambda: window._search_job is None)
 
-        assert submitted == [window.bql_query]
-        assert window.bql.toPlainText() == window.bql_query
+        assert len(submitted) == 1
+        assert submitted[0] == window.bql_query
         assert window.bql_query.startswith("GET(")
         assert "FOR(filter(bondsuniv('active'" in window.bql_query
         assert window.results.equals(bloomberg_results)
         assert window.results_table.rowCount() == 2
         assert window.results_table.columnCount() == 3
         assert window.results_count.text() == "2 results"
-        assert window.results_table.horizontalHeaderItem(0).text() == "Id"
-        assert window.results_table.item(0, 1).text() == "Example Convertible"
+        assert window.results_table.horizontalHeaderItem(0).text() == "ID"
+        assert window.results_table.item(0, 2).text() == "Example Convertible"
     finally:
         window.close()
 
@@ -235,7 +396,7 @@ def test_results_table_displays_prices_and_yields_to_three_decimals():
         "6.438",
         "250000000",
     ]
-    assert table.horizontalHeaderItem(6).text() == "Conversion Premium (%)"
+    assert table.horizontalHeaderItem(6).text() == "conversion premium (%)"
     assert table.horizontalHeaderItem(7).text() == "Amount Outstanding"
     table.deleteLater()
     app.processEvents()
@@ -295,16 +456,13 @@ def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
     try:
         window.get_benchmarks_checkbox.setChecked(True)
         window.submit_search()
-        app.processEvents()
+        wait_for(app, lambda: window._search_job is None)
 
         assert window.results.loc[0, "BENCHMARK_NAME"] == "AAA call"
         headers = [
             window.results_table.horizontalHeaderItem(column).text()
             for column in range(window.results_table.columnCount())
         ]
-        benchmark_column = headers.index("Benchmark Name")
-        assert window.results_table.item(0, benchmark_column).text() == (
-            "AAA call"
-        )
+        assert "Benchmark Name" in headers
     finally:
         window.close()

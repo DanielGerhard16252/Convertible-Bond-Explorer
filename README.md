@@ -1,6 +1,6 @@
 # Convertible Bond Explorer
 
-A Python desktop application for screening convertible and high-yield bonds. Describe a search in plain English or enter filters manually, submit a Bloomberg Query Language (BQL) query, and inspect, export, or analyse the results.
+A Python desktop application for screening convertible and high-yield bonds. Describe a search in plain English or enter filters manually, query Bloomberg BQL, and inspect, export, or analyse the results.
 
 The interface uses PySide6, query validation uses Pydantic, and results are handled with pandas. The desktop app calls the modules in `server/` directly; there is no separate web server to start.
 
@@ -9,7 +9,7 @@ The interface uses PySide6, query validation uses Pydantic, and results are hand
 - Convert natural-language requests into editable search filters.
 - Select a convertible or high-yield universe, with asset-class selection for high-yield searches.
 - Filter by credit rating, price, coupon, issuer, maturity, currency, conversion premium, yield to maturity, country of risk, and amount outstanding.
-- View the generated BQL and sortable results, including a separate results window.
+- View sortable results, including a separate results window.
 - Export results to CSV under `data/`.
 - Run AI analysis using the returned dataset and generated BQL, with web search available for additional context.
 - Optionally retrieve Bloomberg option benchmarks for convertible results.
@@ -26,7 +26,7 @@ py -m venv .venv
 
 Dependencies are currently installed explicitly: `pyproject.toml` contains pytest configuration but does not declare application dependencies or a pinned environment.
 
-For live searches, also install `polars-bloomberg` and configure its Bloomberg API dependencies, including `blpapi`, in this environment. Searches require a working Bloomberg connection and the appropriate data access.
+For Bloomberg searches and optional benchmark lookups, also install `polars-bloomberg` and configure its Bloomberg API dependencies, including `blpapi`, in this environment. Searches and benchmark lookups require a working Bloomberg connection and the appropriate data access.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install polars-bloomberg
@@ -51,7 +51,7 @@ Start the desktop application:
 
 1. Enter a request and select **Interpret request**, or enter filters directly. For example: “Show me BBB-rated USD convertible bonds priced between 90 and 110, then rank the results by yield.”
 2. Review and edit the filters. Amount outstanding is expressed in USD millions and defaults to a minimum of 50. Date inputs use `MM-DD-YYYY`; percentage filters use percentage values.
-3. Select **Submit** to generate BQL and retrieve Bloomberg results. The generated query appears in the interface.
+3. Select **Submit** to retrieve Bloomberg BQL results. Results appear directly below the filters; AI analysis is at the bottom of the window.
 4. Inspect the results, sort by column, or select **Open in new window**. Enter a CSV filename to export the results.
 5. Enter or edit the analysis instructions and select **Run analysis** after retrieving results.
 
@@ -61,7 +61,7 @@ AI interpretation sends the search request to OpenAI. AI analysis sends the retu
 
 `server/csv_provider.py` provides `load_bond_data()` for filtering a local CSV, defaulting to `data/bond_data.csv`. It accepts normalized column names as well as mapped Bloomberg field names. Additional columns are required by the filters you apply.
 
-The desktop **Submit** action currently uses Bloomberg directly; the CSV provider is a separate utility and is not a selectable desktop data source. `data/data_generation.py` contains synthetic-data generation code.
+The desktop **Submit** action uses Bloomberg BQL with the column list for the selected bond universe. The CSV provider remains available as a separate local utility. `data/data_generation.py` contains synthetic-data generation code.
 
 ## Tests
 
@@ -73,7 +73,7 @@ $env:QT_QPA_PLATFORM = "offscreen"
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-The default pytest configuration excludes tests marked `integration` and stores temporary files in `pytest-temp/`. The suite covers query validation, interpretation, BQL compilation, CSV filtering, Bloomberg adapters, benchmarks, analysis, and desktop behaviour.
+The default pytest configuration discovers tests in `tests/`, excludes tests marked `integration`, and uses pytest's managed temporary directories. The suite covers query validation, interpretation, BQL compilation, CSV filtering, sample-data generation, Bloomberg adapters, benchmarks, analysis, and desktop behaviour.
 
 To run integration tests, use a real API key in `.env` and clear the test-only environment override first:
 
@@ -102,13 +102,31 @@ The script targets `dist/ConvertibleBondExplorer.exe`. The current local packagi
 | Path | Purpose |
 | --- | --- |
 | `desktop/` | Application entry point, Qt interface, results, and analysis windows |
+| `desktop/results.py` | Shared result formatting, tables, and secondary windows |
+| `desktop/widgets.py`, `desktop/styles.py` | Reusable input widgets and application styling |
+| `desktop/background.py` | Background workers for independent AI requests |
 | `server/bql_compiler.py` | Compile validated search filters into Bloomberg BQL |
 | `server/bloomberg_api.py` | Execute queries through `polars_bloomberg` |
 | `server/ai_interpreter.py` | Translate natural-language searches into structured filters |
 | `server/ai_analysis.py` | Analyse retrieved data with BQL context |
+| `server/prompts.py` | Prompt construction for both AI services |
 | `server/benchmarks.py` | Retrieve option benchmark candidates |
 | `server/csv_provider.py` | Filter CSV data locally |
 | `shared/` | Query models, filter types, and credit ratings |
 | `data/` | CSV datasets and synthetic-data generation code |
 | `tests/` | Unit and integration tests |
 | `scripts/` | Windows build helper |
+
+Generate a reproducible synthetic dataset in a separate file:
+
+```powershell
+.\.venv\Scripts\python.exe -m data.data_generation --count 1000 --seed 42 --output data/synthetic.csv
+```
+
+Omitting `--output` writes to `data/bond_data.csv`. Importing the generator does not create or overwrite files.
+
+Run the command-line interpretation example:
+
+```powershell
+.\.venv\Scripts\python.exe -m examples.run_ai_interpreter "Show me BBB-rated convertible bonds"
+```

@@ -28,6 +28,21 @@ def test_analysis_instructions_replace_nan_with_none():
     assert "'price': None" in instructions
 
 
+def test_follow_up_sends_full_history_and_original_dataset(monkeypatch):
+    submitted = {}
+    def create(**kwargs):
+        submitted.update(kwargs)
+        return SimpleNamespace(output_text="Follow-up answer")
+    monkeypatch.setattr(ai_analysis, "client", SimpleNamespace(
+        responses=SimpleNamespace(create=create)))
+    history = [{"role": "user", "content": "First question"},
+               {"role": "assistant", "content": "First answer"}]
+    run_post_analysis("Why?", pd.DataFrame({"price": [100]}), "GET(PX_LAST)", history)
+    assert submitted["input"] == history + [{"role": "user", "content": "Why?"}]
+    assert len(history) == 2
+    assert "GET(PX_LAST)" in submitted["instructions"]
+
+
 def test_run_post_analysis_returns_response_text(monkeypatch):
     submitted = {}
 

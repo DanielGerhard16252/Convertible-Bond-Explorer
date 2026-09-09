@@ -2,6 +2,12 @@ from shared.models import CreditRating
 from pydantic import BaseModel, model_validator
 
 
+HIGH_YIELD_RATINGS = (
+    "BB+", "BB", "BB-", "B+", "B", "B-",
+    "CCC+", "CCC", "CCC-", "CC", "C", "D",
+)
+
+
 RATING_ORDER = [
     CreditRating.AAA,
     CreditRating.AA_PLUS,

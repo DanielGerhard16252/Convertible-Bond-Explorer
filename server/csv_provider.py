@@ -4,8 +4,11 @@ import pandas as pd
 
 from shared.models import (
     BondSearchQuery,
+    PriceRange,
+    CouponRange,
     SearchField,
 )
+from shared.ratings import HIGH_YIELD_RATINGS
 
 
 DEFAULT_DATA_PATH = (
@@ -20,6 +23,7 @@ BQL_COLUMN_MAP = {
     "px_last": "price",
     "cpn": "coupon",
     "long_comp_name": "issuer",
+    "id_isin": "isin",
     "maturity": "maturity",
     "crncy": "currency",
     "cnv_prem": "conversion_premium",
@@ -38,10 +42,6 @@ NUMERIC_FIELDS = {
     SearchField.CONVERSION_PREMIUM,
     SearchField.YIELD_TO_MATURITY,
 }
-HIGH_YIELD_RATINGS = {
-    "BB+", "BB", "BB-", "B+", "B", "B-",
-    "CCC+", "CCC", "CCC-", "CC", "C", "D",
-}
 
 
 def require_column(dataframe: pd.DataFrame, column: str) -> None:
@@ -59,38 +59,9 @@ def _read_bond_data(data_path: Path) -> pd.DataFrame:
     return dataframe
 
 
-def load_bond_data(
-    query: BondSearchQuery,
-    data_path: Path = DEFAULT_DATA_PATH,
-) -> pd.DataFrame:
-    dataframe = _read_bond_data(data_path)
-
-    required_columns = {
-        "bond_name",
-        "rating",
-        "price",
-    }
-
-    missing_columns = required_columns - set(dataframe.columns)
-
-    if missing_columns:
-        missing = ", ".join(sorted(missing_columns))
-
-        raise ValueError(
-            f"CSV is missing required columns: {missing}"
-        )
-
-    results = dataframe.copy()
-    universe_filter = next(
-        (item for item in query.filters
-         if item.field == SearchField.BOND_UNIVERSE and item.value),
-        None,
-    )
-    asset_class_filter = next(
-        (item for item in query.filters
-         if item.field == SearchField.ASSET_CLASSES and item.value),
-        None,
-    )
+def _filter_universe(results: pd.DataFrame, query: BondSearchQuery) -> pd.DataFrame:
+    universe_filter = query.find_filter(SearchField.BOND_UNIVERSE)
+    asset_class_filter = query.find_filter(SearchField.ASSET_CLASSES)
     if universe_filter is not None:
         universe = str(universe_filter.value).strip().casefold()
         asset_classes = (
@@ -126,6 +97,48 @@ def load_bond_data(
         else:
             raise ValueError(f"Unsupported bond universe: {universe}")
 
+    return results
+
+
+def _filter_numeric_range(
+    results: pd.DataFrame,
+    column: str,
+    value_range: PriceRange | CouponRange,
+    scale: float = 1,
+) -> pd.DataFrame:
+    require_column(results, column)
+    results = results.copy()
+    results[column] = pd.to_numeric(results[column], errors="coerce")
+    if value_range.minimum is not None:
+        results = results[results[column] >= value_range.minimum * scale]
+    if value_range.maximum is not None:
+        results = results[results[column] <= value_range.maximum * scale]
+    return results
+
+
+def load_bond_data(
+    query: BondSearchQuery,
+    data_path: Path = DEFAULT_DATA_PATH,
+) -> pd.DataFrame:
+    dataframe = _read_bond_data(data_path)
+
+    required_columns = {
+        "bond_name",
+        "rating",
+        "price",
+    }
+
+    missing_columns = required_columns - set(dataframe.columns)
+
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+
+        raise ValueError(
+            f"CSV is missing required columns: {missing}"
+        )
+
+    results = _filter_universe(dataframe.copy(), query)
+
     for search_filter in query.filters:
         if search_filter.value is None:
             continue
@@ -157,19 +170,14 @@ def load_bond_data(
                 )
 
             results = results[rating_matches]
-        elif search_filter.field in NUMERIC_FIELDS:
-            column = search_filter.field.value
-            require_column(results, column)
-            value_range = search_filter.value
-            results[column] = pd.to_numeric(
-                results[column], errors="coerce"
+        elif search_filter.field in NUMERIC_FIELDS | {SearchField.AMOUNT_OUTSTANDING}:
+            scale = 1_000_000 if search_filter.field == SearchField.AMOUNT_OUTSTANDING else 1
+            results = _filter_numeric_range(
+                results, search_filter.field.value, search_filter.value, scale
             )
-
-            if value_range.minimum is not None:
-                results = results[results[column] >= value_range.minimum]
-
-            if value_range.maximum is not None:
-                results = results[results[column] <= value_range.maximum]
+        elif search_filter.field == SearchField.ISIN:
+            require_column(results, "isin")
+            results = results[results["isin"].astype("string").str.strip().str.upper() == search_filter.value]
         elif search_filter.field == SearchField.ISSUER:
             require_column(results, "issuer")
 
@@ -183,10 +191,10 @@ def load_bond_data(
             ]
         elif search_filter.field == SearchField.CURRENCY:
             require_column(results, "currency")
-            currency = str(search_filter.value).strip().upper()
+            currencies = search_filter.value
             results = results[
                 results["currency"].astype(str).str.strip().str.upper()
-                == currency
+                .isin(currencies)
             ]
         elif search_filter.field == SearchField.COUNTRY:
             require_column(results, "country")
@@ -205,22 +213,6 @@ def load_bond_data(
                 .str.upper()
                 .isin(normalized_countries)
             ]
-        elif search_filter.field == SearchField.AMOUNT_OUTSTANDING:
-            require_column(results, "amount_outstanding")
-            value_range = search_filter.value
-            results["amount_outstanding"] = pd.to_numeric(
-                results["amount_outstanding"], errors="coerce"
-            )
-            if value_range.minimum is not None:
-                results = results[
-                    results["amount_outstanding"]
-                    >= value_range.minimum * 1_000_000
-                ]
-            if value_range.maximum is not None:
-                results = results[
-                    results["amount_outstanding"]
-                    <= value_range.maximum * 1_000_000
-                ]
         elif search_filter.field == SearchField.MATURITY:
             require_column(results, "maturity")
             date_range = search_filter.value
