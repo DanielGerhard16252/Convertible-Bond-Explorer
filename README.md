@@ -10,7 +10,7 @@ The interface uses PySide6, query validation uses Pydantic, and results are hand
 - Select a convertible or high-yield universe, with asset-class selection for high-yield searches.
 - Filter by credit rating, price, coupon, issuer, maturity, currency, conversion premium, yield to maturity, country of risk, and amount outstanding.
 - View sortable results, including a separate results window.
-- Export results to CSV under `data/`.
+- Export results through a Save dialog that defaults to Downloads.
 - Run AI analysis using the returned dataset and generated BQL, with web search available for additional context.
 - Optionally retrieve Bloomberg option benchmarks for convertible results.
 
@@ -52,7 +52,7 @@ Start the desktop application:
 1. Enter a request and select **Interpret request**, or enter filters directly. For example: “Show me BBB-rated USD convertible bonds priced between 90 and 110, then rank the results by yield.”
 2. Review and edit the filters. Amount outstanding is expressed in USD millions and defaults to a minimum of 50. Date inputs use `MM-DD-YYYY`; percentage filters use percentage values.
 3. Select **Submit** to retrieve Bloomberg BQL results. Results appear directly below the filters; AI analysis is at the bottom of the window.
-4. Inspect the results, sort by column, or select **Open in new window**. Enter a CSV filename to export the results.
+4. Inspect the results, sort by column, or select **Open in new window**. Select **Export to CSV** to choose a filename and location; the Save dialog defaults to Downloads.
 5. Enter or edit the analysis instructions and select **Run analysis** after retrieving results.
 
 AI interpretation sends the search request to OpenAI. AI analysis sends the returned dataset, BQL, and analysis instructions to OpenAI, and may use web search for additional context.

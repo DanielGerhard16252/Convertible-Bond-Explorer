@@ -5,12 +5,12 @@ QMainWindow, QWidget {
     background-color: #f3f6fb;
     color: #172033;
     font-family: "Segoe UI";
-    font-size: 12px;
+    font-size: 9pt;
 }
 
 QLabel#pageTitle {
     color: #102a56;
-    font-size: 21px;
+    font-size: 15.75pt;
     font-weight: 700;
 }
 
@@ -19,13 +19,13 @@ QLabel#pageSubtitle, QLabel#mutedLabel {
 }
 
 QLabel#pageSubtitle {
-    font-size: 12px;
+    font-size: 9pt;
     margin-bottom: 2px;
 }
 
 QLabel#sectionLabel {
     color: #173c78;
-    font-size: 13px;
+    font-size: 9.75pt;
     font-weight: 650;
 }
 
@@ -130,6 +130,16 @@ QTableWidget::item {
     border-bottom: 1px solid #edf2f7;
 }
 
+QTableWidget::item:selected {
+    background-color: #e3ecfa;
+    color: #172033;
+}
+
+QTableWidget::item:selected:!active {
+    background-color: #e3ecfa;
+    color: #172033;
+}
+
 QHeaderView::section {
     background-color: #173c78;
     color: #ffffff;
@@ -153,6 +163,38 @@ QScrollBar::handle:vertical {
 
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0;
+}
+
+QScrollBar:horizontal {
+    background: #edf2f7;
+    height: 12px;
+    margin: 2px 0;
+    border: none;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #a9bad0;
+    border-radius: 4px;
+    min-width: 36px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #829bbd;
+}
+
+QScrollBar::handle:horizontal:pressed {
+    background: #5d7fae;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+    background: transparent;
+    border: none;
+}
+
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: transparent;
 }
 """
 

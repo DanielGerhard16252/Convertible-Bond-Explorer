@@ -292,9 +292,12 @@ def compile_query(query: BondSearchQuery) -> str:
 
     filter_expression = " AND ".join(conditions)
     universe = (
-        "filter(bondsuniv('active',CONSOLIDATEDUPLICATES='N'),"
+        "filter(debtuniv('active',CONSOLIDATEDUPLICATES='N'),"
         f"{filter_expression})"
     )
+
+    if query.max_number is not None:
+        universe = f"TOP({universe}, {query.max_number}, AMT_OUTSTANDING(CURRENCY=USD))"
 
     # BQuery accepts GET/FOR syntax. This is equivalent to passing the
     # universe and requested field list to the Excel BQL function.

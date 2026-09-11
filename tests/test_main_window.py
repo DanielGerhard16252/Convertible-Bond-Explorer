@@ -15,6 +15,61 @@ import server.benchmarks as benchmarks_module
 from desktop.main_window import MainWindow, populate_results_table
 
 
+def test_export_save_dialog_defaults_to_downloads_and_handles_cancel(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    saved_path = tmp_path / "export.csv"
+    monkeypatch.setattr(main_window_module.QStandardPaths, "writableLocation", lambda location: str(tmp_path))
+    monkeypatch.setattr(main_window_module.QMessageBox, "information", lambda *args: None)
+    accepted = False
+
+    def choose(dialog):
+        assert dialog.directory().absolutePath() == tmp_path.as_posix()
+        assert dialog.acceptMode() == main_window_module.QFileDialog.AcceptMode.AcceptSave
+        assert dialog.defaultSuffix() == "csv"
+        dialog.selectFile(str(saved_path))
+        return (main_window_module.QFileDialog.DialogCode.Accepted if accepted
+                else main_window_module.QFileDialog.DialogCode.Rejected)
+
+    monkeypatch.setattr(main_window_module.QFileDialog, "exec", choose)
+    try:
+        window.results = pd.DataFrame({"ID": ["bond-1"], "PX_LAST": [100.]})
+        window.export_to_csv()
+        assert not saved_path.exists()
+        accepted = True
+        window.export_to_csv()
+        assert pd.read_csv(saved_path).to_dict("records") == window.results.to_dict("records")
+    finally:
+        window.close()
+        app.processEvents()
+
+
+def test_max_number_input_compiles_validates_and_resets(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    errors = []
+    monkeypatch.setattr(main_window_module.QMessageBox, "warning",
+                        lambda *args: errors.append(args[-1]))
+    try:
+        original = main_window_module.compile_query(window.query_from_controls())
+        window.max_number_input.setText(" 25 ")
+        query = window.query_from_controls()
+        assert query.max_number == 25
+        assert "FOR(TOP(filter(" in main_window_module.compile_query(query)
+        window.display_query_in_controls(query)
+        assert window.max_number_input.text() == "25"
+        for invalid in ["0", "-1", "2.5", "abc"]:
+            window.max_number_input.setText(invalid)
+            assert window.query_from_controls() is None
+        assert len(errors) == 4
+        window.reset_filters()
+        assert window.max_number_input.text() == "100"
+        assert main_window_module.compile_query(window.query_from_controls()) == original
+    finally:
+        window.close()
+        app.processEvents()
+
+
 def test_isin_input_populates_and_compiles():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
@@ -84,9 +139,12 @@ def test_benchmark_columns_only_display_when_requested():
         data.attrs["bond_universe"] = "convertible"
         assert select_display_columns(data).columns.tolist() == ["ID"]
         data.attrs["include_benchmarks"] = True
-        assert select_display_columns(data).columns.tolist() == [
-            "ID", "BENCHMARK_ID", "BENCHMARK_NAME", "BENCHMARK_EXPIRE_DT", "BENCHMARK_STRIKE_PX",
+        expected = [
+            "ID", "BENCHMARK_NAME", "BENCHMARK_EXPIRE_DT", "BENCHMARK_STRIKE_PX",
         ]
+        if names == list(BENCHMARK_COLUMN_LABELS.values()):
+            expected = ["ID", *[name.upper() for name in BENCHMARK_COLUMN_LABELS]]
+        assert select_display_columns(data).columns.tolist() == expected
 
 
 def test_analysis_chats_are_independent_and_close_clears_context(monkeypatch):
@@ -281,11 +339,9 @@ def test_submit_sends_bql_and_displays_results(monkeypatch):
         },
     ])
 
-    def fake_execute_bql(query, requested_columns=None):
+    def fake_execute_bql(query, requested_columns=None, **kwargs):
         submitted.append(query)
-        assert requested_columns == main_window_module.get_result_columns(
-            main_window_module.BondSearchQuery(filters=[])
-        )
+        assert requested_columns == main_window_module.get_result_columns(main_window_module.BondSearchQuery(filters=[]))
         return bloomberg_results
 
     monkeypatch.setattr(
@@ -301,7 +357,8 @@ def test_submit_sends_bql_and_displays_results(monkeypatch):
         assert len(submitted) == 1
         assert submitted[0] == window.bql_query
         assert window.bql_query.startswith("GET(")
-        assert "FOR(filter(bondsuniv('active'" in window.bql_query
+        assert "FOR(TOP(filter(debtuniv('active'" in window.bql_query
+        assert ", 100, AMT_OUTSTANDING" in window.bql_query
         assert window.results.equals(bloomberg_results)
         assert window.results_table.rowCount() == 2
         assert window.results_table.columnCount() == 3
@@ -354,6 +411,28 @@ def test_results_table_uses_row_positions_not_dataframe_index_labels():
     app.processEvents()
 
 
+def test_distant_dates_sort_and_benchmark_dates_use_us_format():
+    from datetime import date
+    from desktop.results import SortableTableItem, format_table_value
+    app = QApplication.instance() or QApplication([])
+    dates = [pd.Timestamp("9999-12-31"), pd.Timestamp("2030-01-07"),
+             date(2500, 6, 15), pd.NaT]
+    ordered = sorted(dates, key=SortableTableItem.normalized_sort_value)
+    assert ordered[:3] == [dates[1], dates[2], dates[0]]
+    assert pd.isna(ordered[3])
+    assert format_table_value("MATURITY", dates[0]) == "12-31-9999"
+    for column in ["BENCHMARK_EXPIRE_DT", "BENCHMARK_EXPIRE_DT()", "Benchmark Expire Dt()"]:
+        assert format_table_value(column, "2030-01-07T00:00:00") == "01-07-2030"
+    table = QTableWidget()
+    data = pd.DataFrame({"MATURITY": dates[:3], "BENCHMARK_EXPIRE_DT()": dates[:3]})
+    data.attrs.update(bond_universe="convertible", include_benchmarks=True)
+    populate_results_table(table, data)
+    assert table.item(0, 0).text() == "12-31-9999"
+    assert table.item(0, 1).text() == "12-31-9999"
+    table.deleteLater()
+    app.processEvents()
+
+
 def test_results_table_displays_maturity_in_american_format():
     app = QApplication.instance() or QApplication([])
     table = QTableWidget()
@@ -394,7 +473,7 @@ def test_results_table_displays_prices_and_yields_to_three_decimals():
         "100.555",
         "95.125",
         "6.438",
-        "250000000",
+        "250,000,000",
     ]
     assert table.horizontalHeaderItem(6).text() == "conversion premium (%)"
     assert table.horizontalHeaderItem(7).text() == "Amount Outstanding"
@@ -444,12 +523,16 @@ def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
     monkeypatch.setattr(
         main_window_module,
         "execute_bql",
-        lambda _query, requested_columns=None: bond_results,
+        lambda _query, requested_columns=None, **kwargs: bond_results,
     )
     monkeypatch.setattr(
         benchmarks_module,
         "execute_bql",
-        lambda _query: pd.DataFrame([{"NAME": "AAA call"}]),
+        lambda _query, requested_columns=None, **kwargs: pd.DataFrame([{
+            "NAME": "AAA call", "px_last()": 12.34567, "CPN": 2.5,
+            "YIELD(YIELD_TYPE=YTM)": 4.56789, "AMT_OUTSTANDING": 1000000,
+            "put_call()": "Call", "expire_dt()": "2030-01-07",
+        }]),
     )
 
     window = MainWindow()
@@ -463,6 +546,12 @@ def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
             window.results_table.horizontalHeaderItem(column).text()
             for column in range(window.results_table.columnCount())
         ]
-        assert "Benchmark Name" in headers
+        assert "Name" in headers
+        expected = {
+            "Price": "12.346",
+            "Expire Dt()": "01-07-2030",
+        }
+        for label, value in expected.items():
+            assert window.results_table.item(0, headers.index(label)).text() == value
     finally:
         window.close()

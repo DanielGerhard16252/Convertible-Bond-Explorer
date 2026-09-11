@@ -9,6 +9,86 @@ from server.bloomberg_api import assemble_search_results
 from server.bql_compiler import CONVERTIBLE_RESULT_COLUMNS
 
 
+@pytest.mark.parametrize("fail_during_request", [False, True])
+def test_bql_failure_includes_query_and_response_diagnostics(monkeypatch, fail_during_request):
+    original = ValueError("No dataframes to combine")
+    query = "GET(PX_LAST)\nFOR('XS0000000001 Corp')"
+
+    class EmptyResult:
+        names = []
+        dataframes = []
+
+        def combine(self, **kwargs):
+            raise original
+
+    class FakeBQuery:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bql(self, submitted):
+            assert submitted == query
+            if fail_during_request:
+                raise original
+            return EmptyResult()
+
+    monkeypatch.setitem(sys.modules, "polars_bloomberg", SimpleNamespace(BQuery=FakeBQuery))
+    with pytest.raises(RuntimeError) as caught:
+        execute_bql(query, requested_columns=("ID", "PX_LAST"))
+    message = str(caught.value)
+    assert "Bloomberg BQL request failed: No dataframes to combine" in message
+    assert f"BQL request:\n{query}" in message
+    assert "exception_type=ValueError" in message
+    assert "request_invoked=True" in message
+    assert "combine_on=ID" in message
+    assert "requested_columns=('ID', 'PX_LAST')" in message
+    assert caught.value.__cause__ is original
+    if fail_during_request:
+        assert "stage=execute BQL" in message
+        assert "response_received=False" in message
+        assert "dataframe_count=" not in message
+    else:
+        assert "stage=combine response tables" in message
+        assert "response_received=True" in message
+        assert "dataframe_count=0" in message
+        assert "returned_fields=[]" in message
+
+
+@pytest.mark.parametrize("response", [
+    {"responseExceptions": [{"message": "API access denied", "code": "TEST"}]},
+    {"unexpectedEnvelope": {"results": {}}},
+])
+def test_empty_bql_result_exposes_raw_parser_input(monkeypatch, response):
+    from polars_bloomberg import BQuery
+
+    class FakeBQuery(BQuery):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def _create_bql_request(self, expression):
+            return expression
+
+        def _send_request(self, request):
+            return [response]
+
+    monkeypatch.setitem(sys.modules, "polars_bloomberg", SimpleNamespace(BQuery=FakeBQuery))
+    with pytest.raises(RuntimeError) as caught:
+        execute_bql("GET(PX_LAST) FOR('IBM US Equity')")
+    message = str(caught.value)
+    assert "Raw Bloomberg parser input:" in message
+    assert next(iter(response)) in message
+    if "responseExceptions" in response:
+        assert "API access denied" in message
+        assert '"code": "TEST"' in message
+    assert "polars_bloomberg_version=" in message
+    assert "dataframe_count=0" in message
+
+
 def test_field_assembly_preserves_values_with_different_security_order():
     import polars as pl
     result = SimpleNamespace(names=["px_last()", "CPN"], dataframes=[

@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QCheckBox,
     QFrame,
     QGridLayout,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QTableWidget, 
     QGroupBox,
 )
-from PySide6.QtCore import QLocale, Qt, Slot, QThreadPool
+from PySide6.QtCore import QLocale, Qt, Slot, QThreadPool, QStandardPaths
 from PySide6.QtGui import (
     QDoubleValidator,
     QStandardItem,
@@ -51,12 +52,12 @@ from desktop.results import (
 from shared.countries import EUROPE_COUNTRY_CODES
 
 
-def retrieve_search_results(bql_query, requested_columns, include_benchmarks, universe):
-    """Perform blocking Bloomberg calls without accessing UI widgets."""
-    results = execute_bql(bql_query, requested_columns=requested_columns)
+def retrieve_search_results(query, include_benchmarks):
+    """Retrieve Bloomberg results without accessing UI widgets."""
+    results = execute_bql(compile_query(query), requested_columns=get_result_columns(query))
     if include_benchmarks:
         results = get_benchmark_options(results)
-    results.attrs["bond_universe"] = universe
+    results.attrs["bond_universe"] = query.universe
     results.attrs["include_benchmarks"] = include_benchmarks
     return results
 
@@ -124,12 +125,10 @@ class MainWindow(QMainWindow):
         self.open_results_button.setEnabled(False)
         self.open_results_button.clicked.connect(self.open_results_window)
 
-        self.csv_name = QPlainTextEdit()
-        self.csv_name.setPlaceholderText("Enter CSV file name")
-        self.csv_name.setMaximumHeight(42)
         self.export_csv = QPushButton(
             "Export to CSV"
         )
+        self.export_csv.setObjectName("primaryButton")
         self.export_csv.clicked.connect(
             self.export_to_csv
         )
@@ -209,6 +208,11 @@ class MainWindow(QMainWindow):
         self.isin_input = QLineEdit()
         self.isin_input.setPlaceholderText("12-character ISIN")
         isin_layout.addWidget(self.isin_input)
+        self.max_number_group = QGroupBox("Max number of bonds")
+        max_number_layout = QHBoxLayout(self.max_number_group)
+        self.max_number_input = QLineEdit("100")
+        self.max_number_input.setPlaceholderText("No limit")
+        max_number_layout.addWidget(self.max_number_input)
 
         self.maturity_group = QGroupBox("Maturity (MM-DD-YYYY)")
         maturity_layout = QHBoxLayout()
@@ -246,7 +250,7 @@ class MainWindow(QMainWindow):
         high_yield_type_layout = QHBoxLayout()
         asset_class_row = QHBoxLayout()
         self.asset_class_checkboxes = {}
-        for asset_class in ("Corporates", "Governments", "Municipals"):
+        for asset_class in ("Corporates", "Governments"):
             checkbox = QCheckBox(asset_class)
             checkbox.setChecked(asset_class == "Corporates")
             asset_class_row.addWidget(checkbox)
@@ -365,6 +369,7 @@ class MainWindow(QMainWindow):
             filter_grid.setColumnStretch(column, 1)
         layout.addLayout(filter_grid)
         filter_grid.addWidget(self.isin_group, 2, 3)
+        filter_grid.addWidget(self.max_number_group, 2, 4)
 
         submit_row = QHBoxLayout()
         submit_row.addWidget(self.get_benchmarks_checkbox)
@@ -373,19 +378,15 @@ class MainWindow(QMainWindow):
         submit_row.addWidget(self.submit_button)
         layout.addLayout(submit_row)
 
-        results_header = QHBoxLayout()
-        results_header.addWidget(self.section_label("Search results"))
-        results_header.addStretch()
         self.results_count = QLabel("No results yet")
         self.results_count.setObjectName("mutedLabel")
-        results_header.addWidget(self.results_count)
-        results_header.addWidget(self.open_results_button)
-        layout.addLayout(results_header)
         layout.addWidget(self.results_table, 1)
 
         export_row = QHBoxLayout()
-        export_row.addWidget(self.section_label("Export"))
-        export_row.addWidget(self.csv_name, 1)
+        export_row.addWidget(self.section_label("Search results"))
+        export_row.addStretch()
+        export_row.addWidget(self.results_count)
+        export_row.addWidget(self.open_results_button)
         export_row.addWidget(self.export_csv)
         layout.addLayout(export_row)
 
@@ -409,7 +410,7 @@ class MainWindow(QMainWindow):
 
     def reset_filters(self) -> None:
         self.display_query_in_controls(BondSearchQuery(
-            filters=[], post_analysis=self.post_analysis.toPlainText(),
+            filters=[], max_number=100, post_analysis=self.post_analysis.toPlainText(),
         ))
         self.get_benchmarks_checkbox.setChecked(False)
 
@@ -494,7 +495,7 @@ class MainWindow(QMainWindow):
             if len(selected) == len(self.rating_items)
             else ", ".join(selected)
         )
-        self.rating_dropdown.setCurrentIndex(-1)
+        self.rating_dropdown.setCurrentIndex(0)
         self.rating_dropdown.setPlaceholderText(
             summary or "Select credit ratings"
         )
@@ -538,6 +539,13 @@ class MainWindow(QMainWindow):
 
     def query_from_controls(self) -> BondSearchQuery | None:
         """Validate the search form and construct its typed query."""
+        limit_text = self.max_number_input.text().strip()
+        if limit_text and (not limit_text.isascii() or not limit_text.isdecimal()
+                           or int(limit_text) <= 0):
+            QMessageBox.warning(self, "Invalid maximum number of bonds",
+                                "Enter a positive whole number or leave blank for no limit.")
+            return None
+        max_number = int(limit_text) if limit_text else None
         selected_ratings = [
             rating
             for rating, item in self.rating_items.items()
@@ -655,6 +663,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid range", "A minimum exceeds its maximum.")
             return
         query = BondSearchQuery(
+            max_number=max_number,
             post_analysis=self.post_analysis_request,
             filters=[
                 isin_filter,
@@ -720,8 +729,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Search failed", str(error))
             return
         self._search_job = BackgroundJob(
-            retrieve_search_results, self._pending_bql, get_result_columns(query),
-            self.get_benchmarks, query.universe,
+            retrieve_search_results, query, self.get_benchmarks,
         )
         self._search_job.signals.completed.connect(self._search_finished)
         self.submit_button.setEnabled(False)
@@ -881,21 +889,15 @@ class MainWindow(QMainWindow):
                 "There are no search results to export.",
             )
             return
-        csv_name = self.csv_name.toPlainText().strip()
-
-        if not csv_name:
-            QMessageBox.warning(
-                self,
-                "Missing CSV name",
-                "Enter a name for the CSV file.",
-            )
+        downloads = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+        dialog = QFileDialog(self, "Export to CSV", downloads, "CSV files (*.csv)")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        dialog.setDefaultSuffix("csv")
+        dialog.selectFile("bond_results.csv")
+        if dialog.exec() != QFileDialog.DialogCode.Accepted:
             return
-
-        if not csv_name.lower().endswith(".csv"):
-            csv_name += ".csv"
-
-        if not csv_name.lower().startswith("data/"):
-            csv_name = f"data/{csv_name}"
+        csv_name = dialog.selectedFiles()[0]
 
         try:
             self.results.to_csv(csv_name, index=False)
@@ -926,6 +928,7 @@ class MainWindow(QMainWindow):
         self.maximum_coupon.clear()
         self.issuer_input.clear()
         self.isin_input.clear()
+        self.max_number_input.setText(str(query.max_number) if query.max_number is not None else "")
         self.minimum_maturity.clear()
         self.maximum_maturity.clear()
         self.currency_input.clear()

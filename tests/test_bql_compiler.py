@@ -8,6 +8,24 @@ from server.interpreter import interpret_request
 from shared.models import BondSearchQuery
 
 
+@pytest.mark.parametrize("universe", ["convertible", "high_yield"])
+def test_max_number_wraps_existing_universe(universe):
+    query = BondSearchQuery.model_validate({"filters": [
+        {"field": "bond_universe", "operator": "equals", "value": universe},
+    ]})
+    original = compile_query(query)
+    assert compile_query(query.model_copy(update={"max_number": None})) == original
+    get, universe_expression = original.split(" FOR(", 1)
+    limited = query.model_copy(update={"max_number": 25})
+    assert compile_query(limited) == f"{get} FOR(TOP({universe_expression[:-1]}, 25, AMT_OUTSTANDING))"
+
+
+@pytest.mark.parametrize("limit", [0, -1, 1.5, True])
+def test_max_number_rejects_invalid_limits(limit):
+    with pytest.raises(ValueError):
+        BondSearchQuery(filters=[], max_number=limit)
+
+
 def test_compiles_required_convertible_corporate_universe():
     bql = compile_query(BondSearchQuery(filters=[]))
 
@@ -16,7 +34,7 @@ def test_compiles_required_convertible_corporate_universe():
         "CNTRY_OF_RISK, CRNCY, AMT_OUTSTANDING, BB_COMPOSITE, MATURITY, PX_LAST, CV_CNVS_PX, "
         "CV_CNVS_RATIO, PARITY, CV_PCT_PREMIUM, CPN, "
         "YIELD(YIELD_TYPE=YTM), DELTA, SECURITY_DES) "
-        "FOR(filter(bondsuniv('active',"
+        "FOR(filter(debtuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
         "(CONVERTIBLE == 'Y' AND SRCH_ASSET_CLASS == 'Corporates') AND "
         "AMT_OUTSTANDING >= 50000000))"
@@ -146,7 +164,7 @@ def test_scopes_asset_classes_to_high_yield_universe():
         {
             "field": "asset_classes",
             "operator": "in",
-            "value": ["Governments", "Municipals"],
+            "value": ["Governments"],
         },
     ]})
 
@@ -154,7 +172,7 @@ def test_scopes_asset_classes_to_high_yield_universe():
 
     assert "CONVERTIBLE == 'Y'" not in bql
     assert (
-        "SRCH_ASSET_CLASS IN ['Governments', 'Municipals']" in bql
+        "SRCH_ASSET_CLASS IN ['Governments']" in bql
     )
 
 
@@ -274,7 +292,7 @@ def test_null_price_and_coupon_compile_to_unfiltered_universe():
 
     bql = compile_query(query)
     assert bql.startswith("GET(")
-    assert "FOR(filter(bondsuniv('active'" in bql
+    assert "FOR(filter(debtuniv('active'" in bql
 
 
 def test_compiles_single_issuer_and_escapes_apostrophe():
@@ -311,4 +329,4 @@ def test_null_issuer_compiles_to_unfiltered_universe():
 
     bql = compile_query(query)
     assert bql.startswith("GET(")
-    assert "FOR(filter(bondsuniv('active'" in bql
+    assert "FOR(filter(debtuniv('active'" in bql

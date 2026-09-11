@@ -39,7 +39,7 @@ def test_null_rating_is_ignored_by_compiler():
 
     bql = compile_query(query)
     assert bql.startswith("GET(")
-    assert "FOR(filter(bondsuniv('active'" in bql
+    assert "FOR(filter(debtuniv('active'" in bql
 
 from server.ai_interpreter import build_system_prompt, interpret_request_with_ai
 
@@ -69,8 +69,10 @@ def test_query_accepts_post_analysis_instructions():
     assert query.post_analysis == "Rank the results by yield."
 
 
-def test_ai_interpreter_converts_json_string_to_query(monkeypatch):
+@pytest.mark.parametrize("limit", [25, 100, None])
+def test_ai_interpreter_converts_json_string_to_query(monkeypatch, limit):
     parsed_json = BondSearchQuery.model_validate({
+        "max_number": limit,
         "filters": [{
             "field": "credit_rating",
             "operator": "in",
@@ -91,6 +93,12 @@ def test_ai_interpreter_converts_json_string_to_query(monkeypatch):
     query = interpret_request_with_ai("BBB bonds")
 
     assert isinstance(query, BondSearchQuery)
+    assert query.max_number == limit
+    bql = compile_query(query)
+    if limit is None:
+        assert "TOP(" not in bql
+    else:
+        assert bql.endswith(f", {limit}, AMT_OUTSTANDING))")
     assert query.filters[0].value == ["BBB"]
 
 

@@ -2,6 +2,9 @@ import pandas as pd
 
 from server.bloomberg_api import execute_bql
 
+BENCHMARK_RESULT_COLUMNS = (
+    "ID", "NAME", "EXPIRE_DT", "STRIKE_PX", "PX_LAST",
+)
 
 INPUT_COLUMN_ALIASES = {
     "ticker": (
@@ -39,18 +42,17 @@ let(
 )
 get(
     name(),
-    strike_px(),
     expire_dt(),
-    put_call(),
-    #expiry_delta
+    strike_px(),
+    px_last()
 )
 for(
     top(
         filter(
             options('{escaped_ticker}'),
             put_call() == 'Call'
-            and strike_px() >= {price * 0.95:g}
-            and strike_px() <= {price * 1.05:g}
+            and strike_px() >= {price * 0.9:g}
+            and strike_px() <= {price * 1.1:g}
         ),
         1,
         -#expiry_delta
@@ -72,7 +74,8 @@ def get_benchmark_options(results: pd.DataFrame) -> pd.DataFrame:
             continue
         try:
             benchmark = execute_bql(
-                build_benchmark_query(ticker, float(price), maturity)
+                build_benchmark_query(ticker, float(price), maturity),
+                requested_columns=BENCHMARK_RESULT_COLUMNS,
             )
         except Exception as exc:
             benchmark_columns.add("ERROR")

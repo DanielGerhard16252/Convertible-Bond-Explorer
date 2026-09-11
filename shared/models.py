@@ -2,7 +2,7 @@ from enum import Enum
 from datetime import date
 import json
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class SearchField(str, Enum):
@@ -115,12 +115,11 @@ class SearchFilter(BaseModel):
         elif self.field == SearchField.ASSET_CLASSES and self.value is not None:
             if not isinstance(self.value, list):
                 self.value = [str(self.value)]
-            allowed = {"Corporates", "Governments", "Municipals"}
+            allowed = {"Corporates", "Governments"}
             invalid = set(self.value) - allowed
             if invalid:
                 raise ValueError(
-                    "asset_classes only accepts Corporates, Governments, "
-                    "and Municipals"
+                    "asset_classes only accepts Corporates and Governments"
                 )
         elif self.field == SearchField.BOND_UNIVERSE and self.value is not None:
             if self.value not in {"convertible", "high_yield"}:
@@ -175,6 +174,7 @@ class SearchFilter(BaseModel):
 class BondSearchQuery(BaseModel):
     filters: list[SearchFilter]
     post_analysis: str | None = None
+    max_number: int | None = Field(default=None, gt=0, strict=True)
 
     def find_filter(self, field: SearchField) -> SearchFilter | None:
         """Return the first populated filter for a field."""

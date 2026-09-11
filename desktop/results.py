@@ -28,6 +28,9 @@ THREE_DECIMAL_COLUMNS = {
     "cv_cnvs_ratio",
     "strike_px",
     "benchmark_strike_px",
+    "benchmark_px_last",
+    "benchmark_cpn",
+    "benchmark_yield(yield_type=ytm)",
     "yield_to_maturity",
     "yield(yield_type=ytm)",
 }
@@ -80,10 +83,19 @@ class SortableTableItem(QTableWidgetItem):
 
     @staticmethod
     def normalized_sort_value(value) -> tuple[int, object]:
+        if pd.isna(value):
+            return (3, "")
         if isinstance(value, Real) and not isinstance(value, bool):
             return (0, float(value))
         if isinstance(value, (date, datetime, pd.Timestamp)):
-            return (1, pd.Timestamp(value).value)
+            timestamp = pd.Timestamp(value)
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.tz_convert("UTC")
+            # Calendar components compare across resolutions without forcing
+            # distant maturities into pandas' limited nanosecond range.
+            return (1, (timestamp.year, timestamp.month, timestamp.day,
+                        timestamp.hour, timestamp.minute, timestamp.second,
+                        timestamp.microsecond, timestamp.nanosecond))
         return (2, str(value).casefold())
 
     def __lt__(self, other: QTableWidgetItem) -> bool:
@@ -234,25 +246,26 @@ def configure_results_table(table: QTableWidget) -> None:
     table.setSortingEnabled(True)
     table.setShowGrid(False)
     table.setSelectionBehavior(
-        QAbstractItemView.SelectionBehavior.SelectRows
+        QAbstractItemView.SelectionBehavior.SelectItems
     )
     table.setSelectionMode(
-        QAbstractItemView.SelectionMode.SingleSelection
+        QAbstractItemView.SelectionMode.ExtendedSelection
     )
     table.verticalHeader().setVisible(False)
     table.verticalHeader().setDefaultSectionSize(34)
     table.horizontalHeader().setSectionResizeMode(
         QHeaderView.ResizeMode.ResizeToContents
     )
-    table.horizontalHeader().setStretchLastSection(True)
+    table.horizontalHeader().setResizeContentsPrecision(-1)
+    table.horizontalHeader().setStretchLastSection(False)
     table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
 
 
 BENCHMARK_COLUMN_LABELS = {
-    "benchmark_id": "Benchmark Id",
-    "benchmark_name": "Benchmark Name",
-    "benchmark_expire_dt": "Benchmark Expire Dt()",
-    "benchmark_strike_px": "Benchmark Strike Px()",
+    "benchmark_name": "Name",
+    "benchmark_expire_dt": "Expire Dt()",
+    "benchmark_strike_px": "Strike Px()",
+    "benchmark_px_last": "Price",
 }
 
 
@@ -279,6 +292,8 @@ def select_display_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
     renamed = {}
     for field, label in labels.items():
         aliases = {key(field), key(label)}
+        if field.startswith("benchmark_"):
+            aliases.add(key("Benchmark " + label))
         if field == "security_typ":
             aliases.add(key("Security Type"))
         matches = [column for alias in aliases for column in available.get(alias, [])]
@@ -332,17 +347,30 @@ def format_table_value(column: str, value) -> str:
     if pd.isna(value):
         return str(value)
 
-    normalized_column = column.casefold()
+    normalized_column = column.casefold().removesuffix("()")
+    amount_column = normalized_column.replace("_", "").replace(" ", "")
+    if amount_column in {
+        "amtoutstanding", "amountoutstanding", "amtout",
+        "benchmarkamtoutstanding", "benchmarkamountoutstanding",
+    }:
+        try:
+            return f"{float(value):,.0f}"
+        except (TypeError, ValueError, OverflowError):
+            return str(value)
     if normalized_column in THREE_DECIMAL_COLUMNS:
         try:
             return f"{float(value):.3f}"
         except (TypeError, ValueError):
             return str(value)
 
-    if normalized_column != "maturity":
+    date_column = normalized_column.replace("_", "").replace(" ", "").removesuffix("()")
+    if date_column not in {"maturity", "benchmarkexpiredt"}:
         return str(value)
 
-    maturity = pd.to_datetime(value, errors="coerce")
+    try:
+        maturity = pd.Timestamp(value)
+    except (ValueError, TypeError, OverflowError):
+        return str(value)
     return (
         str(value)
         if pd.isna(maturity)

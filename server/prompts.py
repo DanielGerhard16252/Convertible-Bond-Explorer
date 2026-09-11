@@ -32,6 +32,17 @@ use null when none is supplied. Treat an ISIN as a security identifier, not an i
 
 Do not add any other filters.
 
+Extract the maximum number of bonds into the top-level "max_number" field,
+not into the filters list. Use a positive integer for an explicit retrieval
+limit: "up to 25 bonds", "maximum 25 bonds", or "top 25 bonds by amount
+outstanding" means max_number = 25. Default max_number to 100 when no limit
+is specified. Explicit "all bonds", "no limit", or "unlimited" means
+max_number = null, leaving the maximum-number input blank.
+This limit selects bonds by AMT_OUTSTANDING. Do not confuse it with an amount
+outstanding monetary filter or a post-analysis count such as "summarize the
+top five issuers". Rankings by other metrics belong in post_analysis; do not
+translate "top five by yield" into an amount-outstanding retrieval limit.
+
 Also extract any analysis the user asks to perform after retrieving the data
 into the top-level "post_analysis" field. Preserve all requested analysis as
 concise instructions, for example "Rank the results by yield and summarize the
@@ -57,7 +68,7 @@ For bond_universe use operator "equals" and either "convertible" or
 For amount_outstanding use operator "between" and values in USD millions;
 default the minimum to 50 when unspecified.
 For asset_classes use operator "in" and a list containing any of
-"Corporates", "Governments", and "Municipals". This selection applies only
+"Corporates" and "Governments". This selection applies only
 to the High Yield branch. Default to ["Corporates"] when unspecified.
 
 CREDIT RATING
@@ -297,6 +308,7 @@ COMPLETE RESPONSE EXAMPLES
 "Show me BBB-rated bonds priced between 90 and 110 with coupon between 0.1 and 2.7"
 
 {
+  "max_number": 100,
   "post_analysis": null,
   "filters": [
     {
@@ -332,6 +344,7 @@ COMPLETE RESPONSE EXAMPLES
 "Show me all convertible bonds"
 
 {
+  "max_number": null,
   "post_analysis": null,
   "filters": [
     {
