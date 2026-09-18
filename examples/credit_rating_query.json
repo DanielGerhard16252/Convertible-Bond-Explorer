@@ -1,9 +1,0 @@
-{
-  "filters": [
-    {
-      "field": "credit_rating",
-      "operator": "in",
-      "value": "BBB"
-    }
-  ]
-}
