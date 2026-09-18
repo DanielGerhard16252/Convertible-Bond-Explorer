@@ -6,6 +6,7 @@ from shared.models import (
     SearchOperator,
 )
 from shared.ratings import HIGH_YIELD_RATINGS
+from shared.search_choices import categorical_filters
 
 BQL_FIELD_MAP = {
     SearchField.CREDIT_RATING: "BB_COMPOSITE",
@@ -15,7 +16,9 @@ BQL_FIELD_MAP = {
     SearchField.ISIN: "ID_ISIN",
     SearchField.MATURITY: "MATURITY",
     SearchField.CURRENCY: "CRNCY",
+    SearchField.CONVERSION_PREMIUM: "CV_PCT_PREMIUM",
     SearchField.YIELD_TO_MATURITY: "YIELD(YIELD_TYPE=YTM)",
+    SearchField.YIELD_TO_WORST: "YIELD(YIELD_TYPE=YTW)",
     SearchField.COUNTRY: "CNTRY_OF_RISK",
     SearchField.AMOUNT_OUTSTANDING: "AMT_OUTSTANDING",
 }
@@ -29,7 +32,8 @@ CONVERTIBLE_RESULT_COLUMNS = (
     "CV_COMMON_TICKER_EXCH",
     # CV type
     "SECURITY_TYP",
-    "INDUSTRY_SECTOR",
+    "CLASSIFICATION_NAME(BICS,2)",
+    "PAYMENT_RANK",
     "CNTRY_OF_RISK",
     "CRNCY",
     # General 
@@ -45,6 +49,7 @@ CONVERTIBLE_RESULT_COLUMNS = (
     # Coupon + yield
     "CPN",
     "YIELD(YIELD_TYPE=YTM)",
+    "YIELD(YIELD_TYPE=YTW)",
     # Greeks
     "DELTA",
     # Description
@@ -54,9 +59,11 @@ HIGH_YIELD_RESULT_COLUMNS = (
     # General
     "ID",
     "LONG_COMP_NAME",
+    "CAST_PARENT_EQUITY_TICKER",
     # Security type
     "SECURITY_TYP",
-    "INDUSTRY_SECTOR",
+    "CLASSIFICATION_NAME(BICS,2)",
+    "PAYMENT_RANK",
     "CNTRY_OF_RISK",
     "CRNCY",
     # Specific
@@ -68,18 +75,20 @@ HIGH_YIELD_RESULT_COLUMNS = (
     # Coupon and yield
     "CPN",
     "YIELD(YIELD_TYPE=YTM)",
+    "YIELD(YIELD_TYPE=YTW)",
     # Description
     "SECURITY_DES",
 )
 IGNORED_FILTER_FIELDS = {
-    SearchField.CONVERSION_PREMIUM,
     SearchField.BOND_UNIVERSE,
     SearchField.ASSET_CLASSES,
 }
 NUMERIC_RANGE_FIELDS = {
     SearchField.PRICE,
     SearchField.COUPON,
+    SearchField.CONVERSION_PREMIUM,
     SearchField.YIELD_TO_MATURITY,
+    SearchField.YIELD_TO_WORST,
 }
 
 
@@ -129,10 +138,17 @@ def compile_filter(search_filter: SearchFilter) -> str | None:
     if not search_filter.value:
         return None
 
-    # CNV_PREM is not a valid BQL item. Omit conversion premium until a
-    # supported Bloomberg expression is selected.
+    # Universe and asset classes are applied separately in compile_query.
     if search_filter.field in IGNORED_FILTER_FIELDS:
         return None
+
+    if search_filter.field.value in categorical_filters():
+        require_operator(search_filter, SearchOperator.IN)
+        bql_field = categorical_filters()[search_filter.field.value]["bql_field"]
+        if not bql_field:
+            raise ValueError(f"{search_filter.field.value} Bloomberg field is not configured")
+        values = ", ".join(format_bql_value(value) for value in search_filter.value)
+        return f"{bql_field} IN [{values}]"
 
     bql_field = BQL_FIELD_MAP[search_filter.field]
 

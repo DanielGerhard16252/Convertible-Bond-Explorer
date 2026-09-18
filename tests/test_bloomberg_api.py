@@ -38,7 +38,7 @@ def test_bql_failure_includes_query_and_response_diagnostics(monkeypatch, fail_d
     with pytest.raises(RuntimeError) as caught:
         execute_bql(query, requested_columns=("ID", "PX_LAST"))
     message = str(caught.value)
-    assert "Bloomberg BQL request failed: No dataframes to combine" in message
+    assert message.startswith("No results found; check BQL token limit not hit")
     assert f"BQL request:\n{query}" in message
     assert "exception_type=ValueError" in message
     assert "request_invoked=True" in message
@@ -247,3 +247,31 @@ def test_execute_bql_retains_metadata_columns(monkeypatch):
     assert result.iloc[0]["AMT_OUTSTANDING"] == 250000000
     assert result.iloc[0]["PARITY"] == 95.125
     assert result.iloc[0]["CV_PCT_PREMIUM"] == 6.438
+
+
+@pytest.mark.parametrize("field_values_only", [False, True])
+@pytest.mark.parametrize("empty_tables", [False, True])
+def test_empty_bql_returns_requested_error(monkeypatch, field_values_only, empty_tables):
+    import polars as pl
+    from polars_bloomberg import BqlResult
+
+    result = BqlResult([], []) if empty_tables else BqlResult(
+        [pl.DataFrame(schema={"ID": pl.String, "PX_LAST": pl.Float64})],
+        ["PX_LAST"],
+    )
+
+    class FakeBQuery:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def bql(self, query):
+            return result
+
+    monkeypatch.setitem(sys.modules, "polars_bloomberg", SimpleNamespace(BQuery=FakeBQuery))
+    with pytest.raises(RuntimeError) as caught:
+        execute_bql("GET(PX_LAST) FOR(BONDS)", ("ID", "PX_LAST"),
+                    field_values_only=field_values_only)
+    assert str(caught.value).splitlines()[0] == "No results found; check BQL token limit not hit"

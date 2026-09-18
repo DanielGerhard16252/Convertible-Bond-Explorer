@@ -1,8 +1,10 @@
 from enum import Enum
 from datetime import date
 import json
+import math
 
 from pydantic import BaseModel, Field, model_validator
+from shared.search_choices import categorical_filters, configured_options
 
 
 class SearchField(str, Enum):
@@ -15,10 +17,13 @@ class SearchField(str, Enum):
     CURRENCY = "currency"
     CONVERSION_PREMIUM = "conversion_premium"
     YIELD_TO_MATURITY = "yield_to_maturity"
+    YIELD_TO_WORST = "yield_to_worst"
+    PAYMENT_RANK = "payment_rank"
     COUNTRY = "country"
     BOND_UNIVERSE = "bond_universe"
     AMOUNT_OUTSTANDING = "amount_outstanding"
     ASSET_CLASSES = "asset_classes"
+    FI_BICS_LEVEL_2 = "fi_bics_level_2"
 
 class SearchOperator(str, Enum):
     IN = "in"
@@ -92,6 +97,36 @@ class SearchFilter(BaseModel):
 
     @model_validator(mode="after")
     def validate_value_for_field(self):
+        if self.value is not None:
+            if self.field in {SearchField.CURRENCY, SearchField.COUNTRY}:
+                allowed_operators = {SearchOperator.IN, SearchOperator.EQUALS}
+            elif self.field in {SearchField.ISSUER, SearchField.ISIN, SearchField.BOND_UNIVERSE}:
+                allowed_operators = {SearchOperator.EQUALS}
+            elif self.field in {SearchField.CREDIT_RATING, SearchField.ASSET_CLASSES} or self.field.value in categorical_filters():
+                allowed_operators = {SearchOperator.IN}
+            else:
+                allowed_operators = {SearchOperator.BETWEEN}
+            if self.operator not in allowed_operators:
+                expected = " or ".join(sorted(op.value.upper() for op in allowed_operators))
+                raise ValueError(f"{self.field.value} requires {expected}")
+        if self.field.value in categorical_filters():
+            if self.operator != SearchOperator.IN:
+                raise ValueError(f"{self.field.value} requires IN")
+            if self.value is None:
+                return self
+            if not isinstance(self.value, list):
+                raise ValueError(f"{self.field.value} requires a list of configured options")
+            allowed = {option.casefold(): option
+                       for option in configured_options(self.field.value)}
+            selected = []
+            for option in self.value:
+                canonical = allowed.get(str(option).strip().casefold())
+                if canonical is None:
+                    raise ValueError(f"Unknown or unconfigured {self.field.value} option: {option}")
+                if canonical not in selected:
+                    selected.append(canonical)
+            self.value = selected or None
+            return self
         if self.field == SearchField.ISIN and self.value is not None:
             import re
             if not isinstance(self.value, str):
@@ -122,7 +157,7 @@ class SearchFilter(BaseModel):
                     "asset_classes only accepts Corporates and Governments"
                 )
         elif self.field == SearchField.BOND_UNIVERSE and self.value is not None:
-            if self.value not in {"convertible", "high_yield"}:
+            if not isinstance(self.value, str) or self.value not in {"convertible", "high_yield"}:
                 raise ValueError(
                     "bond_universe must be convertible or high_yield"
                 )
@@ -134,6 +169,7 @@ class SearchFilter(BaseModel):
             SearchField.COUPON,
             SearchField.CONVERSION_PREMIUM,
             SearchField.YIELD_TO_MATURITY,
+            SearchField.YIELD_TO_WORST,
             SearchField.AMOUNT_OUTSTANDING,
         }
         if self.field in numeric_range_fields and self.value is not None:
@@ -153,7 +189,7 @@ class SearchFilter(BaseModel):
                 except ValueError as error:
                     raise ValueError(
                         "amount_outstanding must be a minimum/maximum range "
-                        "in USD millions"
+                        "in millions of the bond currency"
                     ) from error
             elif not isinstance(self.value, (PriceRange, CouponRange)):
                 raise ValueError(
@@ -168,6 +204,17 @@ class SearchFilter(BaseModel):
             raise ValueError(
                 "maturity must contain minimum and maximum dates"
             )
+        if self.field == SearchField.ISSUER and self.value is not None:
+            if not isinstance(self.value, str):
+                raise ValueError("issuer requires one issuer name")
+            self.value = self.value.strip() or None
+        if isinstance(self.value, (PriceRange, CouponRange, DateRange)):
+            low, high = self.value.minimum, self.value.maximum
+            if not isinstance(self.value, DateRange):
+                if any(value is not None and not math.isfinite(value) for value in (low, high)):
+                    raise ValueError(f"{self.field.value} requires finite numbers")
+            if low is not None and high is not None and low > high:
+                raise ValueError(f"{self.field.value} minimum exceeds maximum")
         return self
 
 
@@ -175,6 +222,17 @@ class BondSearchQuery(BaseModel):
     filters: list[SearchFilter]
     post_analysis: str | None = None
     max_number: int | None = Field(default=None, gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def reject_duplicate_filters(self):
+        seen = set()
+        for item in self.filters:
+            if item.value is None:
+                continue
+            if item.field in seen:
+                raise ValueError(f"Duplicate filter: {item.field.value}")
+            seen.add(item.field)
+        return self
 
     def find_filter(self, field: SearchField) -> SearchFilter | None:
         """Return the first populated filter for a field."""
@@ -186,4 +244,4 @@ class BondSearchQuery(BaseModel):
     @property
     def universe(self) -> str:
         selected = self.find_filter(SearchField.BOND_UNIVERSE)
-        return str(selected.value).casefold() if selected else "convertible"
+        return str(selected.value).casefold() if selected else "high_yield"

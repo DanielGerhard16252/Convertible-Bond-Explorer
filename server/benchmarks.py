@@ -1,9 +1,10 @@
+from shared.errors import short_error
 import pandas as pd
 
 from server.bloomberg_api import execute_bql
 
 BENCHMARK_RESULT_COLUMNS = (
-    "ID", "NAME", "EXPIRE_DT", "STRIKE_PX", "PX_LAST",
+    "ID", "NAME", "EXPIRE_DT", "STRIKE_PX", "PX_LAST", "IVOL",
 )
 
 INPUT_COLUMN_ALIASES = {
@@ -44,7 +45,8 @@ get(
     name(),
     expire_dt(),
     strike_px(),
-    px_last()
+    px_last(),
+    ivol()
 )
 for(
     top(
@@ -76,10 +78,12 @@ def get_benchmark_options(results: pd.DataFrame) -> pd.DataFrame:
             benchmark = execute_bql(
                 build_benchmark_query(ticker, float(price), maturity),
                 requested_columns=BENCHMARK_RESULT_COLUMNS,
+                field_values_only=True,
+                allow_all_null=True,
             )
         except Exception as exc:
             benchmark_columns.add("ERROR")
-            benchmark_rows.append({"ERROR": str(exc)})
+            benchmark_rows.append({"ERROR": short_error(exc)})
             continue
         benchmark_columns.update(benchmark.columns)
         benchmark_rows.append(

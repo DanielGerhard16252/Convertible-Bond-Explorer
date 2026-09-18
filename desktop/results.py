@@ -4,16 +4,15 @@ from datetime import date, datetime
 from numbers import Real
 
 import pandas as pd
-from PySide6.QtCore import Qt, Signal, Slot, QThreadPool
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QLabel, QMainWindow, QTableWidget,
-    QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget, QPushButton, QMessageBox,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from desktop.styles import APP_STYLESHEET
-from desktop.widgets import RequestInput
-from desktop.background import BackgroundJob
-from server.ai_analysis import run_post_analysis
+from desktop.bond_record import BondRecordWindow
+from desktop.analysis_window import AnalysisWindow  # Backwards-compatible import.
 
 
 THREE_DECIMAL_COLUMNS = {
@@ -29,49 +28,57 @@ THREE_DECIMAL_COLUMNS = {
     "strike_px",
     "benchmark_strike_px",
     "benchmark_px_last",
+    "benchmark_ivol",
     "benchmark_cpn",
     "benchmark_yield(yield_type=ytm)",
     "yield_to_maturity",
+    "yield_to_worst",
+    "yield(yield_type=ytw)",
     "yield(yield_type=ytm)",
 }
 
 RESULT_COLUMN_LABELS = {
     "id": "ID",
-    "long_comp_name": "Long Comp Name",
-    "cv_common_ticker_exch": "Cv Common Ticker Exch",
-    "security_typ": "Security Typ",
-    "industry_sector": "Industry Sector",
-    "cntry_of_risk": "Country of Risk",
-    "crncy": "CRNCY",
-    "amt_outstanding": "Amount Outstanding",
-    "bb_composite": "BB Composite",
+    "long_comp_name": "Issuer",
+    "cv_common_ticker_exch": "Equity ticker",
+    "security_typ": "Security type",
+    "classification_name(bics,2)": "Sector",
+    "payment_rank": "Payment rank",
+    "cntry_of_risk": "Risk country",
+    "crncy": "Currency",
+    "amt_outstanding": "Outstanding",
+    "bb_composite": "Credit rating",
     "maturity": "Maturity",
-    "px_last": "Px last",
-    "cv_cnvs_px": "Cv Cnvs Px",
-    "cv_cnvs_ratio": "Cv cnvs ratio",
-    "parity": "parity",
-    "cv_pct_premium": "conversion premium (%)",
-    "cpn": "cpn",
-    "yield(yield_type=ytm)": "yield(yield type=ytm)",
-    "delta": "delta",
-    "security_des": "security des",
+    "px_last": "Price",
+    "cv_cnvs_px": "Conversion price",
+    "cv_cnvs_ratio": "Conversion ratio",
+    "parity": "Parity",
+    "cv_pct_premium": "Premium (%)",
+    "cpn": "Coupon (%)",
+    "yield(yield_type=ytm)": "YTM (%)",
+    "yield(yield_type=ytw)": "YTW (%)",
+    "delta": "Delta",
+    "security_des": "Description",
 }
 
 
 HIGH_YIELD_COLUMN_LABELS = {
+    "cast_parent_equity_ticker": "Parent equity ticker",
     "id": "ID",
-    "long_comp_name": "Issuer Name",
-    "security_typ": "Security Type",
-    "industry_sector": "Industry Sector",
-    "cntry_of_risk": "Country of Risk",
-    "crncy": "CRNCY",
-    "amt_outstanding": "Amt Out",
-    "bb_composite": "BB composite",
+    "long_comp_name": "Issuer",
+    "security_typ": "Security type",
+    "classification_name(bics,2)": "Sector",
+    "payment_rank": "Payment rank",
+    "cntry_of_risk": "Risk country",
+    "crncy": "Currency",
+    "amt_outstanding": "Outstanding",
+    "bb_composite": "Credit rating",
     "maturity": "Maturity",
-    "px_last": "px last",
-    "cpn": "cpn",
-    "yield(yield_type=ytm)": "yield(yield type=ytm)",
-    "security_des": "security des",
+    "px_last": "Price",
+    "cpn": "Coupon (%)",
+    "yield(yield_type=ytm)": "YTM (%)",
+    "yield(yield_type=ytw)": "YTW (%)",
+    "security_des": "Description",
 }
 
 
@@ -139,109 +146,29 @@ class ResultsWindow(QMainWindow):
         self.setCentralWidget(container)
 
 
-class AnalysisWindow(QMainWindow):
-    closed = Signal(object)
+def open_bond_record(table: QTableWidget, row: int, column: int) -> None:
+    item = table.item(row, column)
+    if item is None:
+        return
+    position = item.data(Qt.ItemDataRole.UserRole)
+    if position is None:
+        return
+    # The stored source position travels with the item when the table sorts.
+    record = table.source_records.iloc[[position]].copy(deep=True)
+    window = BondRecordWindow(record, table.window(), labels=display_column_labels(record))
+    table.record_windows.append(window)
+    window.closed.connect(lambda closed: table.record_windows.remove(closed))
+    window.show()
+    window.raise_()
+    window.activateWindow()
 
-    def __init__(self, question: str, result: str,
-                 dataset: pd.DataFrame | None = None, bql_query: str = "") -> None:
-        super().__init__()
-        self.history = [
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": result},
-        ]
-        self.dataset = dataset.copy(deep=True) if dataset is not None else pd.DataFrame()
-        self.bql_query = bql_query
-        self._job = None
-        self._closed = False
-        self.setWindowTitle("AI Post Analysis")
-        self.resize(800, 600)
-        self.setStyleSheet(APP_STYLESHEET)
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(12)
-
-        title = QLabel("AI post analysis")
-        title.setObjectName("pageTitle")
-        question_heading = QLabel("Question")
-        question_heading.setObjectName("sectionLabel")
-        self.question_label = QLabel(question)
-        self.question_label.setWordWrap(True)
-
-        result_heading = QLabel("Answer")
-        result_heading.setObjectName("sectionLabel")
-        self.result_text = QTextBrowser()
-        self._render_history()
-        self.result_text.setOpenExternalLinks(True)
-
-        layout.addWidget(title)
-        self.question_label.hide()
-        layout.addWidget(self.result_text, 1)
-        self.follow_up = RequestInput()
-        self.follow_up.setPlaceholderText("Ask a follow-up question (Enter to send, Shift+Enter for a new line)")
-        self.follow_up.setMaximumHeight(90)
-        self.follow_up.submitted.connect(self.submit_follow_up)
-        self.send_button = QPushButton("Send")
-        self.send_button.clicked.connect(self.submit_follow_up)
-        self.send_button.setEnabled(not self.dataset.empty)
-        layout.addWidget(self.follow_up)
-        layout.addWidget(self.send_button)
-        self.setCentralWidget(container)
-
-    def _render_history(self) -> None:
-        self.result_text.setMarkdown("\n\n---\n\n".join(
-            f"**{'You' if message['role'] == 'user' else 'AI'}**\n\n{message['content']}"
-            for message in self.history
-        ))
-        scrollbar = self.result_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-
-    def submit_follow_up(self) -> None:
-        question = self.follow_up.toPlainText().strip()
-        if self._closed or self._job is not None or not question or self.dataset.empty:
-            return
-        self._job = BackgroundJob(
-            run_post_analysis, question, self.dataset.copy(deep=True),
-            self.bql_query, [dict(message) for message in self.history],
-        )
-        self.history.append({"role": "user", "content": question})
-        self._render_history()
-        self.follow_up.clear()
-        self.send_button.setEnabled(False)
-        self.send_button.setText("Waiting...")
-        self._job.signals.completed.connect(self._follow_up_finished)
-        QThreadPool.globalInstance().start(self._job)
-
-    @Slot(object, object)
-    def _follow_up_finished(self, result, error) -> None:
-        self._job = None
-        if self._closed:
-            return
-        self.send_button.setEnabled(True)
-        self.send_button.setText("Send")
-        if error is not None:
-            question = self.history.pop()["content"]
-            if not self.follow_up.toPlainText().strip():
-                self.follow_up.setPlainText(question)
-            QMessageBox.critical(self, "Analysis failed", str(error))
-        else:
-            self.history.append({"role": "assistant", "content": result})
-        self._render_history()
-
-    def closeEvent(self, event) -> None:
-        self._closed = True
-        self.history.clear()
-        self.dataset = pd.DataFrame()
-        self.bql_query = ""
-        self.result_text.clear()
-        self.follow_up.clear()
-        self.question_label.clear()
-        self.closed.emit(self)
-        super().closeEvent(event)
 
 
 def configure_results_table(table: QTableWidget) -> None:
+    table.source_records = pd.DataFrame()
+    table.record_windows = []
+    table.cellDoubleClicked.connect(lambda row, column: open_bond_record(table, row, column))
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setAlternatingRowColors(True)
     table.setSortingEnabled(True)
     table.setShowGrid(False)
@@ -262,10 +189,11 @@ def configure_results_table(table: QTableWidget) -> None:
 
 
 BENCHMARK_COLUMN_LABELS = {
-    "benchmark_name": "Name",
-    "benchmark_expire_dt": "Expire Dt()",
-    "benchmark_strike_px": "Strike Px()",
-    "benchmark_px_last": "Price",
+    "benchmark_name": "Option name",
+    "benchmark_expire_dt": "Option expiry",
+    "benchmark_strike_px": "Option strike",
+    "benchmark_px_last": "Option price",
+    "benchmark_ivol": "Option implied vol",
 }
 
 
@@ -311,7 +239,10 @@ def populate_results_table(
     table: QTableWidget,
     dataframe: pd.DataFrame,
 ) -> None:
-    if "bond_universe" in dataframe.attrs:
+    table.source_records = dataframe.copy(deep=True)
+    if dataframe.empty:
+        dataframe = pd.DataFrame()
+    elif "bond_universe" in dataframe.attrs:
         dataframe = select_display_columns(dataframe)
     table.setSortingEnabled(False)
     table.clear()
@@ -330,14 +261,9 @@ def populate_results_table(
     ):
         for column_number, value in enumerate(row):
             column = str(dataframe.columns[column_number])
-            table.setItem(
-                row_number,
-                column_number,
-                SortableTableItem(
-                    value,
-                    format_table_value(column, value),
-                ),
-            )
+            item = SortableTableItem(value, format_table_value(column, value))
+            item.setData(Qt.ItemDataRole.UserRole, row_number)
+            table.setItem(row_number, column_number, item)
 
     table.resizeColumnsToContents()
     table.setSortingEnabled(True)

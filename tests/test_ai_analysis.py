@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pandas as pd
@@ -16,7 +17,7 @@ def test_analysis_instructions_include_bql_and_dataset_records():
     assert bql in instructions
     assert "'price': 100.0" in instructions
     assert "'rating': 'BBB'" in instructions
-    assert "dataset` is authoritative" in instructions
+    assert "supplied dataset is authoritative" in instructions
 
 
 def test_analysis_instructions_replace_nan_with_none():
@@ -33,8 +34,8 @@ def test_follow_up_sends_full_history_and_original_dataset(monkeypatch):
     def create(**kwargs):
         submitted.update(kwargs)
         return SimpleNamespace(output_text="Follow-up answer")
-    monkeypatch.setattr(ai_analysis, "client", SimpleNamespace(
-        responses=SimpleNamespace(create=create)))
+    monkeypatch.setattr(ai_analysis, "create_client", lambda: nullcontext(SimpleNamespace(
+        responses=SimpleNamespace(create=create))))
     history = [{"role": "user", "content": "First question"},
                {"role": "assistant", "content": "First answer"}]
     run_post_analysis("Why?", pd.DataFrame({"price": [100]}), "GET(PX_LAST)", history)
@@ -53,8 +54,8 @@ def test_run_post_analysis_returns_response_text(monkeypatch):
 
     monkeypatch.setattr(
         ai_analysis,
-        "client",
-        SimpleNamespace(responses=Responses()),
+        "create_client",
+        lambda: nullcontext(SimpleNamespace(responses=Responses())),
     )
     dataset = pd.DataFrame({"bond": ["Bond A"], "yield": [5.2]})
 

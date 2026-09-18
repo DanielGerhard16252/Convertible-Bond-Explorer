@@ -9,6 +9,7 @@ from shared.models import (
     SearchField,
 )
 from shared.ratings import HIGH_YIELD_RATINGS
+from shared.search_choices import categorical_filters
 
 
 DEFAULT_DATA_PATH = (
@@ -30,6 +31,9 @@ BQL_COLUMN_MAP = {
     "cv_pct_premium": "conversion_premium",
     "delta": "delta",
     "yld_ytm_mid": "yield_to_maturity",
+    "yield(yield_type=ytm)": "yield_to_maturity",
+    "yield(yield_type=ytw)": "yield_to_worst",
+    "classification_name(bics,2)": "fi_bics_level_2",
     "cntry_of_risk": "country",
     "amt_outstanding": "amount_outstanding",
     "convertible": "convertible",
@@ -41,6 +45,7 @@ NUMERIC_FIELDS = {
     SearchField.COUPON,
     SearchField.CONVERSION_PREMIUM,
     SearchField.YIELD_TO_MATURITY,
+    SearchField.YIELD_TO_WORST,
 }
 
 
@@ -56,6 +61,9 @@ def _read_bond_data(data_path: Path) -> pd.DataFrame:
                            column.strip().lower().replace(" ", "_"))
         for column in dataframe.columns
     ]
+    duplicates = dataframe.columns[dataframe.columns.duplicated()].tolist()
+    if duplicates:
+        raise ValueError(f"CSV columns map to duplicate fields: {duplicates}")
     return dataframe
 
 
@@ -81,18 +89,15 @@ def _filter_universe(results: pd.DataFrame, query: BondSearchQuery) -> pd.DataFr
             normalized_ratings.isin(HIGH_YIELD_RATINGS)
             & normalized_assets.isin(asset_classes)
         )
-        require_column(results, "convertible")
-        convertible = (
-            results["convertible"]
-            .astype(str)
-            .str.strip()
-            .str.upper()
-            .isin({"Y", "YES", "TRUE", "1"})
-            & normalized_assets.eq("corporates")
-        )
         if universe == "high_yield":
             results = results[high_yield]
         elif universe == "convertible":
+            require_column(results, "convertible")
+            convertible = (
+                results["convertible"].astype(str).str.strip().str.upper()
+                .isin({"Y", "YES", "TRUE", "1"})
+                & normalized_assets.eq("corporates")
+            )
             results = results[convertible]
         else:
             raise ValueError(f"Unsupported bond universe: {universe}")
@@ -170,6 +175,13 @@ def load_bond_data(
                 )
 
             results = results[rating_matches]
+        elif search_filter.field.value in categorical_filters():
+            column = search_filter.field.value
+            require_column(results, column)
+            results = results[
+                results[column].astype("string").str.strip().str.casefold()
+                .isin([value.casefold() for value in search_filter.value])
+            ]
         elif search_filter.field in NUMERIC_FIELDS | {SearchField.AMOUNT_OUTSTANDING}:
             scale = 1_000_000 if search_filter.field == SearchField.AMOUNT_OUTSTANDING else 1
             results = _filter_numeric_range(

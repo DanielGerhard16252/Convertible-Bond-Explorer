@@ -1,22 +1,13 @@
 import sys
-from pathlib import Path
-
-from dotenv import load_dotenv
 from PySide6.QtWidgets import QApplication
 
-
-def load_app_environment() -> None:
-    source_root = Path(__file__).resolve().parents[1]
-    bundle_root = Path(getattr(sys, "_MEIPASS", source_root))
-    load_dotenv(bundle_root / ".env")
-
-
-load_app_environment()
-
-from desktop.main_window import MainWindow  # noqa: E402
+from shared.config import load_app_environment
 
 
 def main() -> None:
+    load_app_environment()
+    from desktop.main_window import MainWindow
+
     app = QApplication(sys.argv)
 
     window = MainWindow()

@@ -1,4 +1,5 @@
 from datetime import date
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -86,8 +87,8 @@ def test_ai_interpreter_converts_json_string_to_query(monkeypatch, limit):
 
     monkeypatch.setattr(
         ai_interpreter_module,
-        "client",
-        SimpleNamespace(responses=Responses()),
+        "create_client",
+        lambda: nullcontext(SimpleNamespace(responses=Responses())),
     )
 
     query = interpret_request_with_ai("BBB bonds")
@@ -98,7 +99,7 @@ def test_ai_interpreter_converts_json_string_to_query(monkeypatch, limit):
     if limit is None:
         assert "TOP(" not in bql
     else:
-        assert bql.endswith(f", {limit}, AMT_OUTSTANDING))")
+        assert bql.endswith(f", {limit}, AMT_OUTSTANDING(CURRENCY=USD)))")
     assert query.filters[0].value == ["BBB"]
 
 

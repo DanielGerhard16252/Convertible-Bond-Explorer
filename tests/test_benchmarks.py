@@ -59,7 +59,7 @@ def test_builds_option_query_for_conversion_price_and_maturity():
     assert "strike_px() <= 110" in query
     get_fields = query.split("get(", 1)[1].split("\n)", 1)[0]
     assert [field.strip() for field in get_fields.split(",")] == [
-        "name()", "expire_dt()", "strike_px()", "px_last()",
+        "name()", "expire_dt()", "strike_px()", "px_last()", "ivol()",
     ]
     assert "expire_dt() - 2030-01-01" in query
 

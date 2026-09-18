@@ -12,7 +12,7 @@ from shared.models import (
 RATING_PATTERN = re.compile(
     r"\b(?:NOT[ -]RATED|UNRATED|N\.A\.?|NR|AAA|AA\+|AA-|AA|A\+|A-|A|"
     r"BBB\+|BBB-|BBB|BB\+|BB-|BB|"
-    r"B\+|B-|B|CCC\+|CCC-|CCC|CC|C|D)\b",
+    r"B\+|B-|B|CCC\+|CCC-|CCC|CC|C|D)(?![\w+\-])",
     re.IGNORECASE,
 )
 

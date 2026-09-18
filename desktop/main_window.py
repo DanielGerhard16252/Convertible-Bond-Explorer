@@ -1,3 +1,4 @@
+from shared.errors import short_error
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -29,9 +30,8 @@ from datetime import date, datetime
 from server.ai_interpreter import interpret_request_with_ai
 from desktop.background import BackgroundJob
 from server.ai_analysis import run_post_analysis
-from server.bloomberg_api import execute_bql
-from server.bql_compiler import compile_query, get_result_columns
-from server.benchmarks import get_benchmark_options
+from server.bql_search import search_bql
+from server.bql_compiler import compile_query
 from shared.models import (
     BondSearchQuery,
     CouponRange,
@@ -44,21 +44,21 @@ from shared.models import (
 )
 
 
+from desktop.analysis_window import AnalysisWindow
 from desktop.styles import APP_STYLESHEET
 from desktop.widgets import CheckableComboBox, RequestInput
 from desktop.results import (
-    AnalysisWindow, ResultsWindow, configure_results_table, populate_results_table,
+    ResultsWindow, configure_results_table, populate_results_table,
 )
 from shared.countries import EUROPE_COUNTRY_CODES
+from shared.search_choices import categorical_filters, configured_options
 
 
 def retrieve_search_results(query, include_benchmarks):
-    """Retrieve Bloomberg results without accessing UI widgets."""
-    results = execute_bql(compile_query(query), requested_columns=get_result_columns(query))
-    if include_benchmarks:
-        results = get_benchmark_options(results)
+    """Retrieve live Bloomberg results without accessing UI widgets."""
+    results = search_bql(query, include_benchmarks=include_benchmarks)
     results.attrs["bond_universe"] = query.universe
-    results.attrs["include_benchmarks"] = include_benchmarks
+    results.attrs["include_benchmarks"] = include_benchmarks and query.universe == "convertible"
     return results
 
 
@@ -236,6 +236,7 @@ class MainWindow(QMainWindow):
         self.universe_dropdown = QComboBox()
         self.universe_dropdown.addItem("Convertible", "convertible")
         self.universe_dropdown.addItem("High Yield", "high_yield")
+        self.universe_dropdown.setCurrentIndex(self.universe_dropdown.findData("high_yield"))
         universe_layout.addWidget(self.universe_dropdown)
         self.universe_group.setLayout(universe_layout)
 
@@ -287,10 +288,39 @@ class MainWindow(QMainWindow):
         )
         self.amount_outstanding_group.setLayout(amount_outstanding_layout)
 
+        self.categorical_groups = {}
+        self.categorical_dropdowns = {}
+        self.categorical_items = {}
+        for field, config in categorical_filters().items():
+            group = QGroupBox(config["label"])
+            group_layout = QHBoxLayout(group)
+            dropdown = CheckableComboBox()
+            options = configured_options(field)
+            dropdown.setPlaceholderText("All (no filter)" if options else "Options not configured")
+            dropdown.setEnabled(bool(options))
+            model = QStandardItemModel(dropdown)
+            items = {}
+            for option in options:
+                item = QStandardItem(option)
+                item.setCheckable(True)
+                item.setCheckState(Qt.CheckState.Unchecked)
+                model.appendRow(item)
+                items[option] = item
+            dropdown.setModel(model)
+            dropdown.setCurrentIndex(-1)
+            model.itemChanged.connect(
+                lambda _item, field=field: self.update_categorical_summary(field)
+            )
+            group_layout.addWidget(dropdown)
+            self.categorical_groups[field] = group
+            self.categorical_dropdowns[field] = dropdown
+            self.categorical_items[field] = items
+
         self.analytics_inputs = {}
         for key, title in (
             ("conversion_premium", "Conversion premium"),
             ("yield_to_maturity", "Yield to maturity"),
+            ("yield_to_worst", "Yield to worst"),
         ):
             group = QGroupBox(title)
             group_layout = QHBoxLayout()
@@ -315,7 +345,7 @@ class MainWindow(QMainWindow):
         self.submit_button.clicked.connect(self.submit_search)
         self.reset_filters_button = QPushButton("Reset filters")
         self.reset_filters_button.setToolTip(
-            "Restore default filters (Convertible, minimum USD 50 MM outstanding)."
+            "Restore default filters (High Yield, minimum USD 50 MM outstanding)."
         )
         self.reset_filters_button.clicked.connect(self.reset_filters)
 
@@ -349,27 +379,25 @@ class MainWindow(QMainWindow):
         filter_grid.setHorizontalSpacing(8)
         filter_grid.setVerticalSpacing(6)
 
-        # Start with issuer identity and credit, move through bond terms,
-        # then finish with convertible-specific analytics.
-        filter_grid.addWidget(self.universe_group, 0, 0)
-        filter_grid.addWidget(self.high_yield_type_group, 0, 1, 1, 2)
-        filter_grid.addWidget(self.country_group, 0, 3)
-        filter_grid.addWidget(self.currency_group, 0, 4)
-        filter_grid.addWidget(self.amount_outstanding_group, 1, 0)
-        filter_grid.addWidget(self.issuer_group, 1, 1)
-        filter_grid.addWidget(self.rating_group, 1, 2)
-        filter_grid.addWidget(self.maturity_group, 1, 3)
-        filter_grid.addWidget(self.coupon_group, 1, 4)
-        filter_grid.addWidget(self.price_group, 2, 0)
-        for column, key in enumerate(
-            ("conversion_premium", "yield_to_maturity")
-        ):
-            filter_grid.addWidget(self.analytics_inputs[key][0], 2, column + 1)
+        # Read left to right: universe and classification, issuer and credit,
+        # numeric terms, then convertible analytics and the result limit.
+        filter_rows = (
+            (self.universe_group, self.high_yield_type_group,
+             self.categorical_groups["fi_bics_level_2"],
+             self.country_group, self.currency_group),
+            (self.issuer_group, self.isin_group, self.rating_group,
+             self.categorical_groups["payment_rank"], self.maturity_group),
+            (self.amount_outstanding_group, self.price_group, self.coupon_group,
+             self.analytics_inputs["yield_to_maturity"][0],
+             self.analytics_inputs["yield_to_worst"][0]),
+            (self.analytics_inputs["conversion_premium"][0], self.max_number_group),
+        )
+        for row, groups in enumerate(filter_rows):
+            for column, group in enumerate(groups):
+                filter_grid.addWidget(group, row, column)
         for column in range(5):
             filter_grid.setColumnStretch(column, 1)
         layout.addLayout(filter_grid)
-        filter_grid.addWidget(self.isin_group, 2, 3)
-        filter_grid.addWidget(self.max_number_group, 2, 4)
 
         submit_row = QHBoxLayout()
         submit_row.addWidget(self.get_benchmarks_checkbox)
@@ -380,10 +408,11 @@ class MainWindow(QMainWindow):
 
         self.results_count = QLabel("No results yet")
         self.results_count.setObjectName("mutedLabel")
+
+        layout.addWidget(self.section_label("Search results"))
         layout.addWidget(self.results_table, 1)
 
         export_row = QHBoxLayout()
-        export_row.addWidget(self.section_label("Search results"))
         export_row.addStretch()
         export_row.addWidget(self.results_count)
         export_row.addWidget(self.open_results_button)
@@ -413,6 +442,17 @@ class MainWindow(QMainWindow):
             filters=[], max_number=100, post_analysis=self.post_analysis.toPlainText(),
         ))
         self.get_benchmarks_checkbox.setChecked(False)
+
+    def update_categorical_summary(self, field: str) -> None:
+        selected = [label for label, item in self.categorical_items[field].items()
+                    if item.checkState() == Qt.CheckState.Checked]
+        dropdown = self.categorical_dropdowns[field]
+        summary = ", ".join(selected) if selected else (
+            "All (no filter)" if dropdown.isEnabled() else "Options not configured"
+        )
+        dropdown.setPlaceholderText(summary)
+        dropdown.setToolTip(summary)
+        dropdown.setCurrentIndex(-1)
 
     def update_universe_dependent_filters(
         self,
@@ -531,13 +571,20 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 "Interpretation failed",
-                str(error),
+                short_error(error),
             )
 
         else:
             self.display_query_in_controls(query)
 
     def query_from_controls(self) -> BondSearchQuery | None:
+        try:
+            return self._query_from_controls()
+        except ValueError as error:
+            QMessageBox.warning(self, "Invalid search filters", short_error(error))
+            return None
+
+    def _query_from_controls(self) -> BondSearchQuery | None:
         """Validate the search form and construct its typed query."""
         limit_text = self.max_number_input.text().strip()
         if limit_text and (not limit_text.isascii() or not limit_text.isdecimal()
@@ -596,20 +643,20 @@ class MainWindow(QMainWindow):
                                        operator=SearchOperator.EQUALS,
                                        value=self.isin_input.text().strip() or None)
         except ValueError as error:
-            QMessageBox.warning(self, "Invalid ISIN", str(error))
+            QMessageBox.warning(self, "Invalid ISIN", short_error(error))
             return
         currency = self.currency_input.text().strip().upper() or None
         try:
             currency = SearchFilter(field=SearchField.CURRENCY,
                                     operator=SearchOperator.IN, value=currency).value
         except ValueError as error:
-            QMessageBox.warning(self, "Invalid currency", str(error))
+            QMessageBox.warning(self, "Invalid currency", short_error(error))
             return
         country_name = self.country_input.text().strip()
         try:
             countries = self.countries_to_iso_codes(country_name)
         except ValueError as error:
-            QMessageBox.warning(self, "Invalid country", str(error))
+            QMessageBox.warning(self, "Invalid country", short_error(error))
             return
         bond_universe = self.universe_dropdown.currentData()
         asset_classes = [
@@ -666,6 +713,12 @@ class MainWindow(QMainWindow):
             max_number=max_number,
             post_analysis=self.post_analysis_request,
             filters=[
+                *[SearchFilter(
+                    field=SearchField(field),
+                    operator=SearchOperator.IN,
+                    value=[label for label, item in items.items()
+                           if item.checkState() == Qt.CheckState.Checked] or None,
+                ) for field, items in self.categorical_items.items()],
                 isin_filter,
                 SearchFilter(
                     field=SearchField.CREDIT_RATING,
@@ -699,6 +752,9 @@ class MainWindow(QMainWindow):
                 SearchFilter(field=SearchField.YIELD_TO_MATURITY,
                              operator=SearchOperator.BETWEEN,
                              value=analytics_ranges["yield_to_maturity"]),
+                SearchFilter(field=SearchField.YIELD_TO_WORST,
+                             operator=SearchOperator.BETWEEN,
+                             value=analytics_ranges["yield_to_worst"]),
                 SearchFilter(field=SearchField.COUNTRY,
                              operator=SearchOperator.IN,
                              value=countries),
@@ -724,9 +780,8 @@ class MainWindow(QMainWindow):
             return
         try:
             self._pending_bql = compile_query(query)
-            print(f"Generated BQL:\n{self._pending_bql}", flush=True)
         except Exception as error:
-            QMessageBox.critical(self, "Search failed", str(error))
+            QMessageBox.critical(self, "Search failed", short_error(error))
             return
         self._search_job = BackgroundJob(
             retrieve_search_results, query, self.get_benchmarks,
@@ -748,8 +803,10 @@ class MainWindow(QMainWindow):
             self.results = results
             self.bql_query = self._pending_bql
             self.update_analysis_button()
+            if results.empty:
+                QMessageBox.warning(self, "No results", "No results")
         except Exception as error:
-            QMessageBox.critical(self, "Search failed", str(error))
+            QMessageBox.critical(self, "Search failed", short_error(error))
         finally:
             self.submit_button.setEnabled(True)
             self.submit_button.setText("Submit")
@@ -806,7 +863,7 @@ class MainWindow(QMainWindow):
         self.results_count.setText(
             f"{count:,} {'result' if count == 1 else 'results'}"
         )
-        self.open_results_button.setEnabled(True)
+        self.open_results_button.setEnabled(not dataframe.empty)
         self.update_analysis_button()
 
     def open_results_window(self) -> None:
@@ -870,7 +927,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 "Analysis failed",
-                str(error),
+                short_error(error),
             )
         self._analysis_dataset = None
         self._analysis_bql = ""
@@ -910,7 +967,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 "Export failed",
-                str(error),
+                short_error(error),
             )
 
     def display_query_in_controls(
@@ -920,6 +977,9 @@ class MainWindow(QMainWindow):
         self.post_analysis.setPlainText(query.post_analysis or "")
 
         # Clear the previous selection.
+        for items in self.categorical_items.values():
+            for item in items.values():
+                item.setCheckState(Qt.CheckState.Unchecked)
         for item in self.rating_items.values():
             item.setCheckState(Qt.CheckState.Unchecked)
         self.minimum_price.clear()
@@ -933,7 +993,7 @@ class MainWindow(QMainWindow):
         self.maximum_maturity.clear()
         self.currency_input.clear()
         self.country_input.clear()
-        self.universe_dropdown.setCurrentIndex(0)
+        self.universe_dropdown.setCurrentIndex(self.universe_dropdown.findData(query.universe))
         for asset_class, checkbox in self.asset_class_checkboxes.items():
             checkbox.setChecked(asset_class == "Corporates")
         self.minimum_amount_outstanding.setText("50")
@@ -943,6 +1003,12 @@ class MainWindow(QMainWindow):
             maximum_input.clear()
 
         for search_filter in query.filters:
+            if search_filter.field.value in self.categorical_items:
+                selected = set(search_filter.value or [])
+                for label, item in self.categorical_items[search_filter.field.value].items():
+                    item.setCheckState(Qt.CheckState.Checked if label in selected
+                                       else Qt.CheckState.Unchecked)
+                continue
             if search_filter.field == SearchField.BOND_UNIVERSE:
                 index = self.universe_dropdown.findData(search_filter.value)
                 if index >= 0:
@@ -994,6 +1060,7 @@ class MainWindow(QMainWindow):
             analytics_key = {
                 SearchField.CONVERSION_PREMIUM: "conversion_premium",
                 SearchField.YIELD_TO_MATURITY: "yield_to_maturity",
+                SearchField.YIELD_TO_WORST: "yield_to_worst",
             }.get(search_filter.field)
             if analytics_key is not None:
                 value_range = search_filter.value

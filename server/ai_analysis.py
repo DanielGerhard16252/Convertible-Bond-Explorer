@@ -1,14 +1,7 @@
-import os
 from server.prompts import build_analysis_instructions
 
 import pandas as pd
-from dotenv import load_dotenv
-from openai import OpenAI
-
-
-load_dotenv()
-client = OpenAI()
-
+from server.ai_client import create_client, model_name
 
 
 def run_post_analysis(
@@ -26,15 +19,16 @@ def run_post_analysis(
 
     instructions = build_analysis_instructions(dataset, bql_query)
 
-    response = client.responses.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-5.6"),
-        instructions=instructions,
-        input=(
-            [dict(message) for message in history]
-            + [{"role": "user", "content": query}]
-            if history else query
-        ),
-        tools=[{"type": "web_search"}],
-    )
+    with create_client() as client:
+        response = client.responses.create(
+            model=model_name(),
+            instructions=instructions,
+            input=(
+                [dict(message) for message in history]
+                + [{"role": "user", "content": query}]
+                if history else query
+            ),
+            tools=[{"type": "web_search"}],
+        )
 
     return response.output_text

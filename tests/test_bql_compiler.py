@@ -5,7 +5,7 @@ from server.bql_compiler import (
     CONVERTIBLE_RESULT_COLUMNS, HIGH_YIELD_RESULT_COLUMNS,
 )
 from server.interpreter import interpret_request
-from shared.models import BondSearchQuery
+from shared.models import BondSearchQuery, SearchFilter
 
 
 @pytest.mark.parametrize("universe", ["convertible", "high_yield"])
@@ -17,7 +17,7 @@ def test_max_number_wraps_existing_universe(universe):
     assert compile_query(query.model_copy(update={"max_number": None})) == original
     get, universe_expression = original.split(" FOR(", 1)
     limited = query.model_copy(update={"max_number": 25})
-    assert compile_query(limited) == f"{get} FOR(TOP({universe_expression[:-1]}, 25, AMT_OUTSTANDING))"
+    assert compile_query(limited) == f"{get} FOR(TOP({universe_expression[:-1]}, 25, AMT_OUTSTANDING(CURRENCY=USD)))"
 
 
 @pytest.mark.parametrize("limit", [0, -1, 1.5, True])
@@ -27,13 +27,15 @@ def test_max_number_rejects_invalid_limits(limit):
 
 
 def test_compiles_required_convertible_corporate_universe():
-    bql = compile_query(BondSearchQuery(filters=[]))
+    bql = compile_query(BondSearchQuery.model_validate({"filters": [
+        {"field": "bond_universe", "operator": "equals", "value": "convertible"},
+    ]}))
 
     assert bql == (
-        "GET(LONG_COMP_NAME, CV_COMMON_TICKER_EXCH, SECURITY_TYP, INDUSTRY_SECTOR, "
+        "GET(LONG_COMP_NAME, CV_COMMON_TICKER_EXCH, SECURITY_TYP, CLASSIFICATION_NAME(BICS,2), PAYMENT_RANK, "
         "CNTRY_OF_RISK, CRNCY, AMT_OUTSTANDING, BB_COMPOSITE, MATURITY, PX_LAST, CV_CNVS_PX, "
         "CV_CNVS_RATIO, PARITY, CV_PCT_PREMIUM, CPN, "
-        "YIELD(YIELD_TYPE=YTM), DELTA, SECURITY_DES) "
+        "YIELD(YIELD_TYPE=YTM), YIELD(YIELD_TYPE=YTW), DELTA, SECURITY_DES) "
         "FOR(filter(debtuniv('active',"
         "CONSOLIDATEDUPLICATES='N'),"
         "(CONVERTIBLE == 'Y' AND SRCH_ASSET_CLASS == 'Corporates') AND "
@@ -58,6 +60,7 @@ def test_compiles_single_credit_rating():
     query = interpret_request(
         "Show me convertible bonds rated BBB"
     )
+    query.filters.append(SearchFilter(field="bond_universe", operator="equals", value="convertible"))
 
     bql = compile_query(query)
 
@@ -67,7 +70,8 @@ def test_compiles_single_credit_rating():
 def test_compiles_missing_credit_rating():
     query = BondSearchQuery.model_validate(
         {
-            "filters": [
+                "filters": [
+                    {"field": "bond_universe", "operator": "equals", "value": "convertible"},
                 {
                     "field": "credit_rating",
                     "operator": "in",
@@ -111,10 +115,19 @@ def test_compiles_new_numeric_filters():
         assert f"{bql_field} <= 5.5" in bql
 
 
-def test_omits_unsupported_conversion_premium_from_bql():
-    bql = compile_query(range_query("conversion_premium", 10, 30))
+@pytest.mark.parametrize("minimum,maximum", [(10, 30), (0, None), (None, 30), (0, 0)])
+def test_filters_conversion_premium_in_universe(minimum, maximum):
+    bql = compile_query(range_query("conversion_premium", minimum, maximum))
+    universe = bql.split(" FOR(", 1)[1]
 
-    assert "CNV_PREM" not in bql
+    if minimum is not None:
+        assert f"CV_PCT_PREMIUM >= {minimum}" in universe
+    else:
+        assert "CV_PCT_PREMIUM >=" not in universe
+    if maximum is not None:
+        assert f"CV_PCT_PREMIUM <= {maximum}" in universe
+    else:
+        assert "CV_PCT_PREMIUM <=" not in universe
 
 
 def test_compiles_country_filter():

@@ -2,10 +2,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-*/
 .env
 dist/
 build/
 *.spec
+!ConvertibleBondExplorer.spec
 .idea/
 .vscode/
 pytest-temp/

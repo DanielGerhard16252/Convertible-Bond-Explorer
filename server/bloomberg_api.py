@@ -3,13 +3,17 @@ from importlib.metadata import PackageNotFoundError, version
 
 import pandas as pd
 
+NO_RESULTS_MESSAGE = "No results found; check BQL token limit not hit"
+
 
 def _column_key(name: str) -> str:
     return "".join(str(name).split()).replace("_", "").casefold().removesuffix("()")
 
 
-def assemble_search_results(result, requested_columns: tuple[str, ...]) -> pd.DataFrame:
+def assemble_search_results(result, requested_columns: tuple[str, ...], *, allow_all_null=False) -> pd.DataFrame:
     """Extract each item's value column before joining, excluding its metadata."""
+    if not result.dataframes:
+        raise ValueError(NO_RESULTS_MESSAGE)
     frames = []
     returned = {_column_key(name): (name, frame)
                 for name, frame in zip(result.names, result.dataframes)}
@@ -45,7 +49,7 @@ def assemble_search_results(result, requested_columns: tuple[str, ...]) -> pd.Da
     if not frames:
         raise ValueError("Bloomberg returned no requested field tables")
     dataframe = pd.concat(frames, axis=1, join="outer").reset_index()
-    if not dataframe.empty and dataframe.drop(columns="ID").isna().all().all():
+    if not allow_all_null and not dataframe.empty and dataframe.drop(columns="ID").isna().all().all():
         raise ValueError(
             "Bloomberg field tables contain IDs but all requested values are null "
             "before merging. Inspect the raw API response and library parser."
@@ -58,6 +62,7 @@ def execute_bql(
     requested_columns: tuple[str, ...] | None = None,
     *,
     field_values_only: bool = False,
+    allow_all_null: bool = False,
 ) -> pd.DataFrame:
     if not query or not query.strip():
         raise ValueError("BQL query cannot be empty")
@@ -88,7 +93,9 @@ def execute_bql(
                 stage = "extract field values"
                 if requested_columns is None:
                     raise ValueError("Field extraction requires requested columns")
-                dataframe = assemble_search_results(result, requested_columns)
+                dataframe = assemble_search_results(result, requested_columns, allow_all_null=allow_all_null)
+                if dataframe.empty:
+                    raise ValueError(NO_RESULTS_MESSAGE)
                 stage = "close Bloomberg session"
                 return dataframe
             stage = "combine response tables"
@@ -101,6 +108,8 @@ def execute_bql(
             )
             stage = "convert response to pandas"
             dataframe = pd.DataFrame(combined.to_dicts())
+            if dataframe.empty:
+                raise ValueError(NO_RESULTS_MESSAGE)
             stage = "close Bloomberg session"
             return dataframe
 
@@ -141,8 +150,14 @@ def execute_bql(
                         )
             except Exception as diagnostic_error:
                 diagnostics.append(f"response_diagnostics_unavailable={diagnostic_error}")
+        message = (
+            NO_RESULTS_MESSAGE
+            if str(exc) == NO_RESULTS_MESSAGE
+            or str(exc).rstrip(".").casefold() == "no dataframes to combine"
+            else f"Bloomberg BQL request failed: {exc}"
+        )
         raise RuntimeError(
-            f"Bloomberg BQL request failed: {exc}\n\n"
+            f"{message}\n\n"
             + "Diagnostics:\n" + "\n".join(diagnostics)
             + f"\n\nBQL request:\n{query}"
         ) from exc

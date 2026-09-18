@@ -52,6 +52,8 @@ def test_max_number_input_compiles_validates_and_resets(monkeypatch):
                         lambda *args: errors.append(args[-1]))
     try:
         original = main_window_module.compile_query(window.query_from_controls())
+        assert window.universe_dropdown.currentData() == "high_yield"
+        assert main_window_module.BondSearchQuery(filters=[]).universe == "high_yield"
         window.max_number_input.setText(" 25 ")
         query = window.query_from_controls()
         assert query.max_number == 25
@@ -63,6 +65,7 @@ def test_max_number_input_compiles_validates_and_resets(monkeypatch):
             assert window.query_from_controls() is None
         assert len(errors) == 4
         window.reset_filters()
+        assert window.universe_dropdown.currentData() == "high_yield"
         assert window.max_number_input.text() == "100"
         assert main_window_module.compile_query(window.query_from_controls()) == original
     finally:
@@ -119,7 +122,7 @@ def test_display_filters_both_universes_using_friendly_names():
                              ("high_yield", HIGH_YIELD_COLUMN_LABELS)]:
         data = pd.DataFrame({label: ["sample"] for label in reversed(list(labels.values()))})
         data["DATE"] = "2026-09-08"
-        data["CURRENCY"] = "USD"
+        data["REQUEST_ID"] = "metadata"
         data["BENCHMARK_NAME"] = "extra"
         data.attrs["bond_universe"] = universe
         table = QTableWidget()
@@ -148,7 +151,7 @@ def test_benchmark_columns_only_display_when_requested():
 
 
 def test_analysis_chats_are_independent_and_close_clears_context(monkeypatch):
-    import desktop.results as results_module
+    import desktop.analysis_window as results_module
     from PySide6.QtCore import Qt
     app = QApplication.instance() or QApplication([])
     calls = []
@@ -216,7 +219,7 @@ def test_search_runs_in_background_and_restores_submit(monkeypatch):
         started.set()
         assert release.wait(5)
         return pd.DataFrame({"ID": ["bond-1"], "PX_LAST": [100.]})
-    monkeypatch.setattr(main_window_module, "execute_bql", search)
+    monkeypatch.setattr(main_window_module, "search_bql", search)
     window = MainWindow()
     try:
         window.submit_search()
@@ -339,15 +342,14 @@ def test_submit_sends_bql_and_displays_results(monkeypatch):
         },
     ])
 
-    def fake_execute_bql(query, requested_columns=None, **kwargs):
-        submitted.append(query)
-        assert requested_columns == main_window_module.get_result_columns(main_window_module.BondSearchQuery(filters=[]))
+    def fake_search_bql(query, **kwargs):
+        submitted.append(main_window_module.compile_query(query))
         return bloomberg_results
 
     monkeypatch.setattr(
         main_window_module,
-        "execute_bql",
-        fake_execute_bql,
+        "search_bql",
+        fake_search_bql,
     )
     window = MainWindow()
     try:
@@ -373,6 +375,7 @@ def test_benchmarks_are_available_only_for_convertible_bonds():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     try:
+        window.universe_dropdown.setCurrentIndex(window.universe_dropdown.findData("convertible"))
         checkbox = window.get_benchmarks_checkbox
         assert checkbox.isEnabled()
         assert window.get_benchmarks is False
@@ -475,8 +478,8 @@ def test_results_table_displays_prices_and_yields_to_three_decimals():
         "6.438",
         "250,000,000",
     ]
-    assert table.horizontalHeaderItem(6).text() == "conversion premium (%)"
-    assert table.horizontalHeaderItem(7).text() == "Amount Outstanding"
+    assert table.horizontalHeaderItem(6).text() == "Premium (%)"
+    assert table.horizontalHeaderItem(7).text() == "Outstanding"
     table.deleteLater()
     app.processEvents()
 
@@ -513,7 +516,7 @@ def test_analysis_window_displays_question_and_string_result(monkeypatch):
         window.close()
 
 
-def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
+def test_benchmark_results_flow_from_bql_to_table(monkeypatch):
     app = QApplication.instance() or QApplication([])
     bond_results = pd.DataFrame([{
         "CV_COMMON_TICKER_EXCH": "AAA US Equity",
@@ -522,21 +525,14 @@ def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
     }])
     monkeypatch.setattr(
         main_window_module,
-        "execute_bql",
-        lambda _query, requested_columns=None, **kwargs: bond_results,
+        "search_bql",
+        lambda _query, **kwargs: bond_results.assign(
+            BENCHMARK_NAME="AAA call", BENCHMARK_PX_LAST=12.34567,
+            BENCHMARK_EXPIRE_DT="2030-01-07"),
     )
-    monkeypatch.setattr(
-        benchmarks_module,
-        "execute_bql",
-        lambda _query, requested_columns=None, **kwargs: pd.DataFrame([{
-            "NAME": "AAA call", "px_last()": 12.34567, "CPN": 2.5,
-            "YIELD(YIELD_TYPE=YTM)": 4.56789, "AMT_OUTSTANDING": 1000000,
-            "put_call()": "Call", "expire_dt()": "2030-01-07",
-        }]),
-    )
-
     window = MainWindow()
     try:
+        window.universe_dropdown.setCurrentIndex(window.universe_dropdown.findData("convertible"))
         window.get_benchmarks_checkbox.setChecked(True)
         window.submit_search()
         wait_for(app, lambda: window._search_job is None)
@@ -546,10 +542,10 @@ def test_benchmark_results_flow_from_bloomberg_to_table(monkeypatch):
             window.results_table.horizontalHeaderItem(column).text()
             for column in range(window.results_table.columnCount())
         ]
-        assert "Name" in headers
+        assert "Option name" in headers
         expected = {
-            "Price": "12.346",
-            "Expire Dt()": "01-07-2030",
+            "Option price": "12.346",
+            "Option expiry": "01-07-2030",
         }
         for label, value in expected.items():
             assert window.results_table.item(0, headers.index(label)).text() == value
