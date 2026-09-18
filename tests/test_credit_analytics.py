@@ -47,7 +47,7 @@ def test_underlying_price_and_put_moneyness(strike, expected):
             "VOLATILITY(CALC_INTERVAL=260D)"), "field_values_only": True}
         return pd.DataFrame({"PX_LAST": [100.], "CUR_MKT_CAP": [10000.],
                              "BS_ST_BORROW": [None], "BS_LT_BORROW": [200.],
-                             "VOLATILITY(CALC_INTERVAL=260D)": [25.]})
+                             "VOLATILITY(CALC_INTERVAL=260D)": [.25]})
     result = get_options("ABC US Equity", executor=execute)
     assert result.loc[0, "UNDERLYING_PX_LAST"] == 100
     assert result.loc[0, "PUT_OTM_PERCENT"] == expected
@@ -55,7 +55,7 @@ def test_underlying_price_and_put_moneyness(strike, expected):
     assert result.loc[0, "UNDERLYING_CUR_MKT_CAP"] == 10000
     assert pd.isna(result.loc[0, "UNDERLYING_BS_ST_BORROW"])
     assert result.loc[0, "UNDERLYING_BS_LT_BORROW"] == 200
-    assert result.loc[0, "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)"] == 25
+    assert result.loc[0, "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)"] == .25
 
 
 def test_underlying_failure_preserves_put():
@@ -85,13 +85,13 @@ def test_merton_recovers_known_asset_model(assets, asset_vol, years):
     annual, spread = calculate_merton_spread(
         equity, 50., 100., math.expm1(rate) * 100,
         pd.Timestamp("2026-01-01") + pd.Timedelta(days=365 * years),
-        equity_vol * 100, .6, today="2026-01-01")
+        equity_vol, .6, today="2026-01-01")
     assert annual == pytest.approx(1 - (1 - expected) ** (1 / years))
     assert spread == pytest.approx(annual * .6)
 
 
 @pytest.mark.parametrize("equity, short_debt, long_debt, vol", [
-    (None, 50, 100, 30), (100, -1, 100, 30), (100, 0, 0, 30), (100, 50, 100, 0),
+    (None, 50, 100, .30), (100, -1, 100, .30), (100, 0, 0, .30), (100, 50, 100, 0),
 ])
 def test_merton_rejects_missing_or_invalid_inputs(equity, short_debt, long_debt, vol):
     from server.credit_analytics import calculate_merton_spread
@@ -105,7 +105,7 @@ def test_equity_is_retained_when_no_puts_found():
             raise RuntimeError("No results found")
         return pd.DataFrame({"PX_LAST": [100.], "CUR_MKT_CAP": [1000.],
                              "BS_ST_BORROW": [50.], "BS_LT_BORROW": [100.],
-                             "VOLATILITY(CALC_INTERVAL=260D)": [30.]})
+                             "VOLATILITY(CALC_INTERVAL=260D)": [.30]})
     result = get_options("ABC US Equity", executor=execute)
     assert result.empty
     assert result.attrs["equity"]["UNDERLYING_CUR_MKT_CAP"] == 1000.

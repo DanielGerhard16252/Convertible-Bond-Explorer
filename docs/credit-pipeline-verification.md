@@ -32,8 +32,8 @@ units, currencies and model outputs remain unverified.
   not a separate Merton calibration at one year.
 - Market cap and both debt fields must use the same monetary scale and currency.
   The current request uses field defaults; these need checking in Bloomberg.
-- Volatility is interpreted as an annualised percentage and divided by 100.
-  The selected Bloomberg field's convention needs checking in the live response.
+- Volatility is an annualised decimal, as confirmed by the user; it is passed
+  directly to Merton and formatted as a percentage only for display.
 - The interpolated curve quote is treated as an annual effective percentage for
   the requested log conversion. The same bond-maturity rate is used for the put;
   curve quote conventions and any requirement for a put-tenor rate remain model

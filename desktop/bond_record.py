@@ -325,7 +325,7 @@ class BondRecordWindow(QMainWindow):
                 elif field == "PUT_OTM_PERCENT":
                     display = f"{float(value):.2f}%"
                 elif field == "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)":
-                    display = f"{float(value):.2f}%"
+                    display = f"{float(value):.2%}"
                 elif field in {"UNDERLYING_CUR_MKT_CAP", "UNDERLYING_BS_ST_BORROW", "UNDERLYING_BS_LT_BORROW"}:
                     display = f"{float(value):,.2f}"
                 elif field in {"STRIKE_PX", "PX_BID", "PX_ASK", "PX_LAST", "UNDERLYING_PX_LAST"}:

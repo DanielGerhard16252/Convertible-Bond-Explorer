@@ -28,7 +28,7 @@ def test_bql_to_both_displayed_spreads(monkeypatch, options_first, missing):
     d1 = (math.log(assets / debt) + (rate + .5 * asset_vol ** 2) * years) / (asset_vol * math.sqrt(years))
     d2 = d1 - asset_vol * math.sqrt(years)
     equity = assets * norm.cdf(d1) - debt * math.exp(-rate * years) * norm.cdf(d2)
-    vol_percent = assets / equity * norm.cdf(d1) * asset_vol * 100
+    vol_decimal = assets / equity * norm.cdf(d1) * asset_vol
     calls = []
 
     def tables(values, ids):
@@ -64,7 +64,7 @@ def test_bql_to_both_displayed_spreads(monkeypatch, options_first, missing):
                 raise RuntimeError("Equity lookup unavailable")
             return tables({"px_last()": [100.], "cur_mkt_cap()": [None if missing == "equity" else equity],
                            "bs_st_borrow()": [50.], "bs_lt_borrow()": [100.],
-                           "volatility(calc_interval=260D)": [vol_percent]}, ["ABC US Equity"])
+                           "volatility(calc_interval=260D)": [vol_decimal]}, ["ABC US Equity"])
 
     monkeypatch.setitem(sys.modules, "polars_bloomberg", SimpleNamespace(BQuery=FakeBQuery))
     interest_rate = BondRecordWindow.get_interest_rate("USD", maturity)

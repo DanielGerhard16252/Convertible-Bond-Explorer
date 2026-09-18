@@ -98,14 +98,14 @@ def merton(E, ST, LT, r, T, vol):
 
 
 def calculate_merton_spread(equity, short_debt, long_debt, rate_percent,
-                            maturity, volatility_percent, lgd, today=None):
-    """Return annual PD and LGD-weighted spread; monetary inputs share units."""
+                            maturity, volatility, lgd, today=None):
+    """Return annual PD and spread; volatility is decimal, rate is percent."""
     today = pd.Timestamp.now(tz="UTC").normalize() if today is None else pd.to_datetime(today, utc=True)
     years = (pd.to_datetime(maturity, utc=True) - today).total_seconds() / (365 * 24 * 3600)
     if not math.isfinite(float(lgd)) or not 0 <= lgd <= 1:
         raise ValueError("LGD must be between zero and one")
     probability = float(merton(float(equity), float(short_debt), float(long_debt),
                                math.log1p(float(rate_percent) / 100), years,
-                               float(volatility_percent) / 100))
+                               float(volatility)))
     annual_pd = 1.0 if probability == 1 else -math.expm1(math.log1p(-probability) / years)
     return annual_pd, annual_pd * lgd

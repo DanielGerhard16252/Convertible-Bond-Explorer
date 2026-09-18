@@ -311,12 +311,12 @@ def test_two_model_spreads_display_without_working(monkeypatch):
         window.option_results = pd.DataFrame({
             "PX_ASK": [.1], "STRIKE_PX": [7.5], "EXPIRE_DT": [today + pd.Timedelta(days=365)],
             "UNDERLYING_CUR_MKT_CAP": [1000.], "UNDERLYING_BS_ST_BORROW": [50.],
-            "UNDERLYING_BS_LT_BORROW": [100.], "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)": [30.],
+            "UNDERLYING_BS_LT_BORROW": [100.], "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)": [.30],
         })
         window._update_approximate_spread()
         assert "DOOTM credit spread:" in window.approximate_spread_label.text()
         assert "Merton credit spread: 1.2000% (120.00 bps)" in window.merton_spread_label.text()
-        assert calls[0] == (1000., 50., 100., 4., maturity, 30., .6)
+        assert calls[0] == (1000., 50., 100., 4., maturity, .30, .6)
         assert not hasattr(window, "calculation_label")
     finally:
         window.close()
