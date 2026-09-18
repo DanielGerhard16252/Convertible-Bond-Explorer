@@ -14,7 +14,11 @@ from PySide6.QtWidgets import (
 from desktop.background import BackgroundJob
 from desktop.styles import APP_STYLESHEET
 from server.bloomberg_api import execute_bql
-
+from server import bond_lookups
+from server.bond_lookups import OIS_LOOKUP
+from server.credit_analytics import (
+    calculate_approximate_spread, calculate_default_probability, calculate_credit_metrics, calculate_merton_spread,
+)
 
 
 class BondRecordWindow(QMainWindow):
@@ -34,6 +38,8 @@ class BondRecordWindow(QMainWindow):
         self.credit_spread = None
         self.approximate_credit_spread = None
         self.default_probability = None
+        self.merton_default_probability = None
+        self.merton_credit_spread = None
         self.loss_given_default = None
         self.record = record.copy(deep=True)
         columns = {str(column).casefold(): position
@@ -87,33 +93,24 @@ class BondRecordWindow(QMainWindow):
         self.interest_rate_label = QLabel()
         layout.addWidget(self.interest_rate_label)
         self.credit_spread_label = QLabel()
-        layout.addWidget(self.credit_spread_label)
+        self.credit_spread_label.hide()
         self.approximate_spread_label = QLabel()
         self.approximate_spread_label.setObjectName("pageTitle")
         self.approximate_spread_label.setWordWrap(True)
         layout.addWidget(self.approximate_spread_label)
-        variables_heading = QLabel("Calculation inputs and derived values")
+        variables_heading = QLabel("Inputs")
         variables_heading.setObjectName("sectionLabel")
         layout.addWidget(variables_heading)
         self.variables_table = self._detail_table(["Variable", "Symbol", "Value", "Units / basis"])
         layout.addWidget(self.variables_table)
-        self.calculation_label = QLabel()
-        self.calculation_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.calculation_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.calculation_label.setWordWrap(True)
-        self.calculation_label.hide()
-        calculation_toggle = QPushButton("Show calculation steps")
-        calculation_toggle.setCheckable(True)
-        calculation_toggle.toggled.connect(self.calculation_label.setVisible)
-        calculation_toggle.toggled.connect(
-            lambda checked: calculation_toggle.setText(
-                "Hide calculation steps" if checked else "Show calculation steps"))
-        layout.addWidget(calculation_toggle, alignment=Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self.calculation_label)
+        self.merton_spread_label = QLabel()
+        self.merton_spread_label.setObjectName("pageTitle")
+        self.merton_spread_label.setWordWrap(True)
+        layout.insertWidget(layout.indexOf(self.approximate_spread_label) + 1, self.merton_spread_label)
         self.options_status = QLabel()
         self.options_status.setWordWrap(True)
         layout.addWidget(self.options_status)
-        self.options_table = self._detail_table(["Option field", "Value"])
+        self.options_table = self._detail_table(["Returned field", "Value"])
         self.options_table.hide()
         layout.addWidget(self.options_table)
         layout.addStretch()
@@ -166,8 +163,10 @@ class BondRecordWindow(QMainWindow):
         if self.loss_given_default is None:
             return
         self.approximate_credit_spread = None
+        self.merton_credit_spread = None
+        self.merton_default_probability = None
         self.approximate_spread_label.clear()
-        self.calculation_label.clear()
+        self.merton_spread_label.clear()
         self.variables_table.setRowCount(0)
         self.options_table.setRowCount(0)
         self.options_table.hide()
@@ -233,171 +232,64 @@ class BondRecordWindow(QMainWindow):
 
         self._update_approximate_spread()
 
-    @staticmethod
-    def calculate_approximate_spread(ask, rate_percent, expiry, lgd, strike, today=None):
-        today = pd.Timestamp.now(tz="UTC").normalize() if today is None else pd.to_datetime(today, utc=True)
-        years = (pd.to_datetime(expiry, utc=True) - today).total_seconds() / (365 * 24 * 3600)
-        if not math.isfinite(years) or years <= 0:
-            raise ValueError("Option expiry must be in the future")
-        if not all(math.isfinite(float(value)) for value in (ask, rate_percent, lgd)) or not 0 <= lgd <= 1:
-            raise ValueError("Ask, interest rate and LGD must be valid numbers")
-        strike = float(strike)
-        if not math.isfinite(strike) or strike <= 0:
-            raise ValueError("Strike must be a positive number")
-        if float(rate_percent) <= -100:
-            raise ValueError("Interest rate must be greater than -100%")
-        rate = math.log1p(float(rate_percent) / 100)
-        q = float(ask) * math.exp(rate * years) / strike
-        if not 0 <= q < 1:
-            raise ValueError("The formula requires 0 <= ask * exp(r * T) / strike < 1")
-        return BondRecordWindow.calculate_default_probability(q, years) * lgd
+    calculate_approximate_spread = staticmethod(calculate_approximate_spread)
 
     def _update_approximate_spread(self):
         self.default_probability = None
+        self.approximate_credit_spread = None
+        self.merton_default_probability = None
+        self.merton_credit_spread = None
         if self.interest_rate is None or self.option_results is None or self.loss_given_default is None:
             return
-        if self.option_results.empty:
-            self.approximate_spread_label.setText("no puts found")
-            return
-        option = {str(key).strip().casefold(): value for key, value in self.option_results.iloc[0].items()}
+        option = ({str(key).strip().casefold(): value for key, value in self.option_results.iloc[0].items()}
+                  if not self.option_results.empty else {})
+        option.update({key.casefold(): value for key, value in self.option_results.attrs.get("equity", {}).items()})
         today = pd.Timestamp.now(tz="UTC").normalize()
-        try:
-            self.approximate_credit_spread = self.calculate_approximate_spread(
-                option["px_ask"], self.interest_rate, option["expire_dt"], self.loss_given_default, option["strike_px"], today=today
-            )
-        except (ValueError, TypeError, KeyError, OverflowError) as error:
-            self.approximate_spread_label.setText(f"Approximate credit spread: unavailable ({short_error(error)})")
-            return
-        years = (pd.to_datetime(option["expire_dt"], utc=True) - today).total_seconds() / (365 * 24 * 3600)
-        rate = math.log1p(float(self.interest_rate) / 100)
-        ask = float(option["px_ask"])
-        strike = float(option["strike_px"])
-        q = ask * math.exp(rate * years) / strike
-        y = -math.log1p(-q) / years
-        self.default_probability = self.calculate_default_probability(q, years)
-        probability_text = f"{self.default_probability:.4%}"
+        record = self.record.iloc[0] if not self.record.empty else pd.Series(dtype=object)
+        maturity = next((record[column] for column in record.index
+                         if str(column).strip().casefold() == "maturity"), None)
         self._fill_detail_table(self.variables_table, [
             ("Risk-free interest rate", "r", f"{self.interest_rate:.4f}%", "Annual rate"),
-            ("Continuous risk-free rate", "rₑ", f"{rate:.6f}", "ln(1 + r), decimal per year"),
-            ("Valuation date", "", today.strftime("%d %b %Y"), "UTC"),
-            ("Option expiry", "", pd.Timestamp(option["expire_dt"]).strftime("%d %b %Y"), "Date"),
-            ("Time to expiry", "T", f"{years:.4f}", "Years (actual days / 365)"),
-            ("Put ask price", "P", f"{ask:,.6f}", "Option quote units"),
-            ("Strike price", "K", f"{strike:,.4f}", "Same price units as ask"),
-            ("Loss given default", "LGD", f"{self.loss_given_default:.2%}", "Fraction used in calculation"),
-            ("Derived q", "q", f"{q:.6%}", "P × exp(rₑ × T) / K"),
-            ("Default intensity", "y", f"{y:.6f}", "−ln(1 − q) / T_put, per year"),
-            ("Default probability horizon", "T_PD", "1.0000", "Year"),
-            ("One-year default probability", "PD", probability_text, "1 ? exp(?y ? 1)"),
-            ("Approximate spread", "LGD × PD (1 year)", f"{self.approximate_credit_spread:.4%}",
-             f"{self.approximate_credit_spread * 10000:,.2f} bps"),
+            ("Loss given default", "LGD", f"{self.loss_given_default:.2%}", ""),
+            ("Bond maturity", "", str(maturity) if maturity is not None else "Unavailable", ""),
         ])
-        self.calculation_label.setText(
-            f"r = ln(1 + {self.interest_rate:.6g}% / 100) = {rate:.8g}\n"
-            f"T = (expiry - {today:%Y-%m-%d}) / 365 days = {years:.8g} years\n"
-            f"LGD = {self.loss_given_default * 100:.6g}% / 100 = {self.loss_given_default:.8g}\n"
-            f"q = {ask:.8g} * exp({rate:.8g} * {years:.8g}) / {strike:.8g} = {q:.8g}\n"
-            f"y = -ln(1 - {q:.8g}) / {years:.8g} = {y:.8g} per year\n"
-            f"PD (1 year) = 1 - exp(-y * 1) = {probability_text}\n"
-            f"Spread = LGD * PD (1 year) = {self.loss_given_default:.8g} * {self.default_probability:.8g} = {self.approximate_credit_spread:.8g}"
-        )
-        self.approximate_spread_label.setText(
-            f"Approximate credit spread (LGD × one-year PD): {self.approximate_credit_spread * 100:.4f}% "
-            f"({self.approximate_credit_spread * 10000:.2f} bps)"
-            f"\nOne-year default probability: {probability_text}"
-        )
+        try:
+            metrics = calculate_credit_metrics(
+                option["px_ask"], self.interest_rate, option["expire_dt"],
+                self.loss_given_default, option["strike_px"], today=today)
+            self.approximate_credit_spread = metrics.spread
+            self.default_probability = metrics.default_probability
+            self.approximate_spread_label.setText(
+                f"DOOTM credit spread: {metrics.spread:.4%} ({metrics.spread * 10000:,.2f} bps)"
+                f"\nOne-year default probability: {metrics.default_probability:.4%}")
+        except (ValueError, TypeError, KeyError, OverflowError) as error:
+            self.approximate_spread_label.setText(
+                f"DOOTM: {self.option_results.attrs.get('put_error', 'no puts found')}"
+                if self.option_results.empty else f"DOOTM: {short_error(error)}")
+        try:
+            probability, spread = calculate_merton_spread(
+                option.get("underlying_cur_mkt_cap"), option.get("underlying_bs_st_borrow"),
+                option.get("underlying_bs_lt_borrow"), self.interest_rate, maturity,
+                option.get("underlying_volatility(calc_interval=260d)"),
+                self.loss_given_default, today=today)
+            self.merton_default_probability = probability
+            self.merton_credit_spread = spread
+            self.merton_spread_label.setText(
+                f"Merton credit spread: {spread:.4%} ({spread * 10000:,.2f} bps)"
+                f"\nOne-year default probability: {probability:.4%}")
+        except (ValueError, TypeError, KeyError, OverflowError) as error:
+            message = self.option_results.attrs.get("equity_error", "unavailable (missing inputs or calibration failed)")
+            self.merton_spread_label.setText(f"Merton: {message}")
 
-    @staticmethod
-    def calculate_default_probability(q, put_years, horizon_years=1.0):
-        if not all(math.isfinite(value) for value in (q, put_years, horizon_years)):
-            raise ValueError("Default probability inputs must be finite")
-        if not 0 <= q < 1 or put_years <= 0 or horizon_years < 0:
-            raise ValueError("Requires 0 <= q < 1, positive put horizon and nonnegative probability horizon")
-        y = -math.log1p(-q) / put_years
-        return -math.expm1(-y * horizon_years)
+    calculate_default_probability = staticmethod(calculate_default_probability)
 
     @staticmethod
     def get_interest_rate(currency, maturity):
-        currency = str(currency).strip().upper()
-        maturity = pd.to_datetime(maturity, utc=True).tz_localize(None)
-        if pd.isna(maturity):
-            raise ValueError("Bond maturity is missing")
-        if currency not in OIS_LOOKUP:
-            raise ValueError(f"Interest-rate curve is not configured for currency: {currency}")
-        query = f"GET(maturity(), px_last()) FOR(curvemembers('{OIS_LOOKUP[currency]}'))"
-        results = execute_bql(
-            query, requested_columns=("maturity", "PX_LAST"),
-            field_values_only=True,
-        ).copy()
-        results["maturity"] = (
-            pd.to_datetime(results["maturity"], format="mixed", errors="raise", utc=True)
-            .dt.tz_localize(None)
-            .astype("datetime64[ns]")
-        )
-        results["PX_LAST"] = pd.to_numeric(results["PX_LAST"], errors="coerce")
-        results = results.dropna(subset=["maturity", "PX_LAST"])
-        results = results.loc[results["PX_LAST"].map(math.isfinite).astype(bool)].sort_values("maturity")
-        if results.empty:
-            raise ValueError("No valid swap rates are available for this currency")
-        upper = results["maturity"].searchsorted(maturity)
-        if upper == 0:
-            return float(results.iloc[0]["PX_LAST"])
-        if upper == len(results):
-            return float(results.iloc[-1]["PX_LAST"])
-        right = results.iloc[upper]
-        left = results.iloc[upper - 1]
-        weight = (maturity - left["maturity"]) / (right["maturity"] - left["maturity"])
-        return float(left["PX_LAST"] + weight * (right["PX_LAST"] - left["PX_LAST"]))
+        return bond_lookups.get_interest_rate(currency, maturity, executor=execute_bql)
 
     @staticmethod
-    def get_options(ticker_name, maturity, today=None):
-        today = (pd.Timestamp.now(tz="UTC") if today is None else pd.to_datetime(today, utc=True)).tz_localize(None).normalize()
-        start = (today + pd.Timedelta(days=30)).strftime("%Y-%m-%d")
-        ticker_name = str(ticker_name).replace("\\", "\\\\").replace("'", "\\'")
-        query = f"""
-let(
-    #avg_volume = avg(
-        dropna(px_volume(dates=range(-30d, 0d)))
-    );
-    #relative_spread = (
-        px_ask() - px_bid()
-    ) / (
-        (px_ask() + px_bid()) / 2
-    );
-)
-get(
-    name(),
-    put_call(),
-    expire_dt(),
-    strike_px(),
-    px_bid(),
-    px_ask(),
-    px_last(),
-    #avg_volume,
-    open_int()
-)
-for(
-    top(
-        filter(
-            options('{ticker_name}'),
-            put_call() == 'Put'
-            and expire_dt() > {start}
-            and px_bid() > 0
-            and px_ask() > 0
-            and open_int() >= 100
-            and #avg_volume >= 5
-            and #relative_spread <= 0.1
-        ),
-        1,
-        -strike_px()
-    )
-)
-"""
-        print(query, flush=True)
-        return execute_bql(query, requested_columns=(
-            "NAME", "PUT_CALL", "EXPIRE_DT", "STRIKE_PX", "PX_BID", "PX_ASK",
-            "PX_LAST", "#avg_volume", "OPEN_INT",
-        ), field_values_only=True)
+    def get_options(ticker_name, maturity=None, today=None):
+        return bond_lookups.get_options(ticker_name, maturity, today, executor=execute_bql)
 
     @Slot(object, object)
     def _options_finished(self, results, error):
@@ -410,20 +302,33 @@ for(
             return
         self.option_results = results
         self._update_approximate_spread()
-        self.options_status.setText("Selected put option" if not results.empty else "no puts found")
+        self.options_status.setText("Put and underlying equity values" if not results.empty
+                                    else results.attrs.get("put_error", "no puts found"))
         names = {"NAME": "Name", "PUT_CALL": "Option type", "EXPIRE_DT": "Expiry",
                  "STRIKE_PX": "Strike", "PX_BID": "Bid", "PX_ASK": "Ask",
                  "PX_LAST": "Last price", "#AVG_VOLUME": "Average volume (30 days)",
-                 "OPEN_INT": "Open interest"}
+                 "OPEN_INT": "Open interest", "UNDERLYING_PX_LAST": "Underlying price",
+                 "UNDERLYING_CUR_MKT_CAP": "Equity market cap (Bloomberg units)",
+                 "UNDERLYING_BS_ST_BORROW": "Short-term borrowing (Bloomberg units)",
+                 "UNDERLYING_BS_LT_BORROW": "Long-term borrowing (Bloomberg units)",
+                 "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)": "Equity volatility (260 days)",
+                 "PUT_OTM_PERCENT": "Put out of the money (%)", "UNDERLYING_ERROR": "Underlying lookup"}
         rows = []
-        for _, option in results.iterrows():
+        display_results = results if not results.empty else pd.DataFrame([results.attrs.get("equity", {})])
+        for _, option in display_results.iterrows():
             for column, value in option.items():
                 field = str(column).upper()
                 if pd.isna(value):
                     display = "—"
                 elif field == "EXPIRE_DT":
                     display = pd.Timestamp(value).strftime("%d %b %Y")
-                elif field in {"STRIKE_PX", "PX_BID", "PX_ASK", "PX_LAST"}:
+                elif field == "PUT_OTM_PERCENT":
+                    display = f"{float(value):.2f}%"
+                elif field == "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)":
+                    display = f"{float(value):.2f}%"
+                elif field in {"UNDERLYING_CUR_MKT_CAP", "UNDERLYING_BS_ST_BORROW", "UNDERLYING_BS_LT_BORROW"}:
+                    display = f"{float(value):,.2f}"
+                elif field in {"STRIKE_PX", "PX_BID", "PX_ASK", "PX_LAST", "UNDERLYING_PX_LAST"}:
                     display = f"{float(value):,.4f}"
                 elif field in {"OPEN_INT", "#AVG_VOLUME"}:
                     display = f"{float(value):,.2f}"
@@ -441,41 +346,3 @@ for(
             self._options_job.signals.completed.disconnect(self._options_finished)
         self.closed.emit(self)
         super().closeEvent(event)
-
-
-
-
-OIS_LOOKUP = {
-    "CAD": "YCSW0147 Index",
-    "CHF": "YCSW0234 Index",
-    "EUR": "YCSW0514 Index",  # €STR; replaces EONIA curve 0133
-    "GBP": "YCSW0141 Index",
-    "JPY": "YCSW0195 Index",
-    "SEK": "YCSW0185 Index",
-    "USD": "YCSW0490 Index",  # SOFR; replaces Fed Funds curve 0042
-    "AUD": "YCSW0159 Index",
-    "BRL": "YCSW0089 Index",
-    "CNY": "YCSW0228 Index",
-    "COP": "YCSW0329 Index",
-    "CZK": "YCSW0551 Index",
-    "DKK": "YCSW0186 Index",
-    "GEL": "YCSW0586 Index",
-    "HKD": "YCSW0145 Index",
-    "HUF": "YCSW0325 Index",
-    "IDR": "YCSW0158 Index",
-    "ILS": "YCSW0585 Index",
-    "INR": "YCSW0046 Index",
-    "ISK": "YCSW0188 Index",
-    "KRW": "YCSW0057 Index",
-    "MXN": "YCSW0583 Index",
-    "MYR": "YCSW0267 Index",
-    "NOK": "YCSW0487 Index",
-    "NZD": "YCSW0198 Index",
-    "PHP": "YCSW0370 Index",
-    "PLN": "YCSW0327 Index",
-    "RUB": "YCSW0356 Index",
-    "SGD": "YCSW0527 Index",
-    "THB": "YCSW0146 Index",
-    "TRY": "YCSW0522 Index",
-    "ZAR": "YCSW0584 Index",
-}

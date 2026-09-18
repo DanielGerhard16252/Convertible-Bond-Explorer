@@ -47,6 +47,7 @@ from shared.models import (
 from desktop.analysis_window import AnalysisWindow
 from desktop.styles import APP_STYLESHEET
 from desktop.widgets import CheckableComboBox, RequestInput
+from desktop.filter_controls import set_checked_items, set_range_inputs
 from desktop.results import (
     ResultsWindow, configure_results_table, populate_results_table,
 )
@@ -91,7 +92,7 @@ class MainWindow(QMainWindow):
         self.request_input.setPlaceholderText(
             "Example: Show me BBB-rated convertible bonds"
         )
-        self.request_input.setMaximumHeight(44)
+        self.request_input.setFixedHeight(40)
 
         self.interpret_button = QPushButton(
             "Interpret request"
@@ -104,7 +105,7 @@ class MainWindow(QMainWindow):
         )
         self.post_analysis = RequestInput()
         self.post_analysis.submitted.connect(self.run_analysis)
-        self.post_analysis.setMaximumHeight(58)
+        self.post_analysis.setFixedHeight(44)
         self.post_analysis.setPlaceholderText(
             "Enter post-analysis instructions or use AI assisted search"
         )
@@ -350,8 +351,8 @@ class MainWindow(QMainWindow):
         self.reset_filters_button.clicked.connect(self.reset_filters)
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(20, 16, 20, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
         title = QLabel("Convertible Bond Explorer")
         title.setObjectName("pageTitle")
         subtitle = QLabel(
@@ -364,8 +365,8 @@ class MainWindow(QMainWindow):
         request_card = QFrame()
         request_card.setObjectName("card")
         request_layout = QVBoxLayout(request_card)
-        request_layout.setContentsMargins(12, 9, 12, 9)
-        request_layout.setSpacing(6)
+        request_layout.setContentsMargins(10, 6, 10, 6)
+        request_layout.setSpacing(4)
         request_layout.addWidget(self.section_label("AI assisted search"))
         request_row = QHBoxLayout()
         request_row.setSpacing(10)
@@ -376,8 +377,8 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.section_label("Filters"))
         filter_grid = QGridLayout()
-        filter_grid.setHorizontalSpacing(8)
-        filter_grid.setVerticalSpacing(6)
+        filter_grid.setHorizontalSpacing(7)
+        filter_grid.setVerticalSpacing(4)
 
         # Read left to right: universe and classification, issuer and credit,
         # numeric terms, then convertible analytics and the result limit.
@@ -394,6 +395,8 @@ class MainWindow(QMainWindow):
         )
         for row, groups in enumerate(filter_rows):
             for column, group in enumerate(groups):
+                group.layout().setContentsMargins(6, 4, 6, 4)
+                group.layout().setSpacing(4)
                 filter_grid.addWidget(group, row, column)
         for column in range(5):
             filter_grid.setColumnStretch(column, 1)
@@ -420,13 +423,26 @@ class MainWindow(QMainWindow):
         layout.addLayout(export_row)
 
         layout.addWidget(self.section_label("AI analysis"))
-        layout.addWidget(self.post_analysis)
-        layout.addWidget(
-            self.run_analysis_button,
-            alignment=Qt.AlignmentFlag.AlignRight,
-        )
+        analysis_row = QHBoxLayout()
+        analysis_row.addWidget(self.post_analysis, 1)
+        analysis_row.addWidget(self.run_analysis_button)
+        layout.addLayout(analysis_row)
 
         container = QWidget()
+        container.setObjectName("mainPage")
+        container.setStyleSheet("""
+            QWidget#mainPage QGroupBox {
+                margin-top: 6px;
+                padding: 4px 3px 3px 3px;
+            }
+            QWidget#mainPage QLineEdit, QWidget#mainPage QComboBox,
+            QWidget#mainPage QPlainTextEdit {
+                padding: 3px 6px;
+            }
+            QWidget#mainPage QPushButton {
+                padding: 4px 10px;
+            }
+        """)
         container.setLayout(layout)
 
         self.setCentralWidget(container)
@@ -1002,127 +1018,41 @@ class MainWindow(QMainWindow):
             minimum_input.clear()
             maximum_input.clear()
 
+        range_controls = {
+            SearchField.PRICE: (self.minimum_price, self.maximum_price),
+            SearchField.COUPON: (self.minimum_coupon, self.maximum_coupon),
+            SearchField.AMOUNT_OUTSTANDING: (
+                self.minimum_amount_outstanding, self.maximum_amount_outstanding),
+            SearchField.MATURITY: (self.minimum_maturity, self.maximum_maturity),
+            **{SearchField(key): (minimum, maximum)
+               for key, (_, minimum, maximum) in self.analytics_inputs.items()},
+        }
+        text_controls = {
+            SearchField.ISSUER: self.issuer_input,
+            SearchField.ISIN: self.isin_input,
+            SearchField.COUNTRY: self.country_input,
+            SearchField.CURRENCY: self.currency_input,
+        }
         for search_filter in query.filters:
-            if search_filter.field.value in self.categorical_items:
-                selected = set(search_filter.value or [])
-                for label, item in self.categorical_items[search_filter.field.value].items():
-                    item.setCheckState(Qt.CheckState.Checked if label in selected
-                                       else Qt.CheckState.Unchecked)
-                continue
-            if search_filter.field == SearchField.BOND_UNIVERSE:
-                index = self.universe_dropdown.findData(search_filter.value)
+            field, value = search_filter.field, search_filter.value
+            if field.value in self.categorical_items:
+                set_checked_items(self.categorical_items[field.value], value)
+            elif field == SearchField.CREDIT_RATING:
+                set_checked_items(self.rating_items, value)
+            elif field == SearchField.BOND_UNIVERSE:
+                index = self.universe_dropdown.findData(value)
                 if index >= 0:
                     self.universe_dropdown.setCurrentIndex(index)
-                continue
-
-            if search_filter.field == SearchField.ASSET_CLASSES:
-                selected = set(search_filter.value or [])
+            elif field == SearchField.ASSET_CLASSES:
                 for asset_class, checkbox in self.asset_class_checkboxes.items():
-                    checkbox.setChecked(asset_class in selected)
-                continue
-
-            if search_filter.field == SearchField.AMOUNT_OUTSTANDING:
-                value_range = search_filter.value
-                if value_range is not None and not isinstance(value_range, list):
-                    if value_range.minimum is not None:
-                        self.minimum_amount_outstanding.setText(
-                            f"{value_range.minimum:g}"
-                        )
-                    if value_range.maximum is not None:
-                        self.maximum_amount_outstanding.setText(
-                            f"{value_range.maximum:g}"
-                        )
-                continue
-
-            if search_filter.field == SearchField.COUNTRY:
-                if isinstance(search_filter.value, list):
-                    self.country_input.setText(", ".join(search_filter.value))
-                elif isinstance(search_filter.value, str):
-                    self.country_input.setText(search_filter.value)
-                continue
-
-            if search_filter.field == SearchField.CURRENCY:
-                if isinstance(search_filter.value, list):
-                    self.currency_input.setText(", ".join(search_filter.value))
-                elif isinstance(search_filter.value, str):
-                    self.currency_input.setText(search_filter.value)
-                continue
-
-            if search_filter.field == SearchField.MATURITY:
-                value_range = search_filter.value
-                if value_range is not None and not isinstance(value_range, list):
-                    if value_range.minimum is not None:
-                        self.minimum_maturity.setText(value_range.minimum.strftime("%m-%d-%Y"))
-                    if value_range.maximum is not None:
-                        self.maximum_maturity.setText(value_range.maximum.strftime("%m-%d-%Y"))
-                continue
-
-            analytics_key = {
-                SearchField.CONVERSION_PREMIUM: "conversion_premium",
-                SearchField.YIELD_TO_MATURITY: "yield_to_maturity",
-                SearchField.YIELD_TO_WORST: "yield_to_worst",
-            }.get(search_filter.field)
-            if analytics_key is not None:
-                value_range = search_filter.value
-                if value_range is not None and not isinstance(value_range, list):
-                    _, minimum_input, maximum_input = self.analytics_inputs[analytics_key]
-                    if value_range.minimum is not None:
-                        minimum_input.setText(f"{value_range.minimum:g}")
-                    if value_range.maximum is not None:
-                        maximum_input.setText(f"{value_range.maximum:g}")
-                continue
-
-            if search_filter.field == SearchField.ISSUER:
-                if isinstance(search_filter.value, str):
-                    self.issuer_input.setText(search_filter.value)
-            if search_filter.field == SearchField.ISIN:
-                if isinstance(search_filter.value, str):
-                    self.isin_input.setText(search_filter.value)
-                continue
-                continue
-
-            if search_filter.field == SearchField.COUPON:
-                coupon_range = search_filter.value
-                if coupon_range is None or isinstance(coupon_range, list):
-                    continue
-                if coupon_range.minimum is not None:
-                    self.minimum_coupon.setText(
-                        f"{coupon_range.minimum:g}"
-                    )
-                if coupon_range.maximum is not None:
-                    self.maximum_coupon.setText(
-                        f"{coupon_range.maximum:g}"
-                    )
-                continue
-
-            if search_filter.field == SearchField.PRICE:
-                price_range = search_filter.value
-                if not isinstance(price_range, PriceRange):
-                    continue
-                if price_range.minimum is not None:
-                    self.minimum_price.setText(
-                        f"{price_range.minimum:g}"
-                    )
-                if price_range.maximum is not None:
-                    self.maximum_price.setText(
-                        f"{price_range.maximum:g}"
-                    )
-                continue
-
-            if search_filter.field != SearchField.CREDIT_RATING:
-                continue
-
-            selected_ratings = set(
-                search_filter.value or []
-            )
-
-            for rating, item in (
-                self.rating_items.items()
-            ):
-                item.setCheckState(
-                    Qt.CheckState.Checked
-                    if rating in selected_ratings
-                    else Qt.CheckState.Unchecked
-                )
+                    checkbox.setChecked(asset_class in (value or []))
+            elif field in range_controls:
+                set_range_inputs(*range_controls[field], value,
+                                 date_values=field == SearchField.MATURITY)
+            elif field in text_controls:
+                if isinstance(value, list):
+                    text_controls[field].setText(", ".join(value))
+                elif isinstance(value, str):
+                    text_controls[field].setText(value)
 
         self.update_universe_dependent_filters()

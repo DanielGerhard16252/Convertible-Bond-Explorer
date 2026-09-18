@@ -3,11 +3,9 @@ from importlib.metadata import PackageNotFoundError, version
 
 import pandas as pd
 
+from shared.columns import column_key as _column_key
+
 NO_RESULTS_MESSAGE = "No results found; check BQL token limit not hit"
-
-
-def _column_key(name: str) -> str:
-    return "".join(str(name).split()).replace("_", "").casefold().removesuffix("()")
 
 
 def assemble_search_results(result, requested_columns: tuple[str, ...], *, allow_all_null=False) -> pd.DataFrame:

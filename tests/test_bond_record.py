@@ -172,7 +172,7 @@ def test_credit_spread_display(field, ytm, expected):
 
 
 @pytest.mark.parametrize("days", [100, 1000, 3000])
-def test_option_query_expires_more_than_30_days_from_today(monkeypatch, capsys, days):
+def test_option_query_expires_at_least_10_days_from_today(monkeypatch, capsys, days):
     import desktop.bond_record as module
     calls = []
     expected = pd.DataFrame({"PX_ASK": [0.12], "STRIKE_PX": [10]})
@@ -181,8 +181,8 @@ def test_option_query_expires_more_than_30_days_from_today(monkeypatch, capsys, 
     maturity = today + pd.Timedelta(days=days)
     results = module.BondRecordWindow.get_options("DEMO US Equity", maturity, today=today)
     queries = [capsys.readouterr().out]
-    assert results is expected
-    assert len(calls) == 1
+    pd.testing.assert_frame_equal(results[expected.columns], expected)
+    assert len(calls) == 2
     assert calls[0][0].strip() == queries[0].strip()
     assert "PX_ASK" in calls[0][1]["requested_columns"]
     get_fields = calls[0][0].split("get(", 1)[1].split("\n)", 1)[0]
@@ -190,8 +190,8 @@ def test_option_query_expires_more_than_30_days_from_today(monkeypatch, capsys, 
                        for field in get_fields.split(",")}
     assert returned_fields == {field.casefold() for field in calls[0][1]["requested_columns"]}
     assert "options('DEMO US Equity')" in queries[0]
-    assert "expire_dt() > 2026-01-31" in queries[0]
-    assert "expire_dt() >=" not in queries[0]
+    assert "expire_dt() >= 2026-01-11" in queries[0]
+    assert "expire_dt() > " not in queries[0]
     assert "expire_dt() <=" not in queries[0]
 
 
@@ -248,7 +248,8 @@ def test_continuous_rate_calculation_displays():
         assert window.approximate_credit_spread == pytest.approx(expected)
         assert window.default_probability == pytest.approx(0.1 * 1.04 / 7.5)
         assert "One-year default probability:" in window.approximate_spread_label.text()
-        assert f"r = ln(1 + 4% / 100) = {math.log1p(0.04):.8g}" in window.calculation_label.text()
+        assert not hasattr(window, "calculation_label")
+        assert "Merton:" in window.merton_spread_label.text()
         assert f"{expected * 100:.4f}%" in window.approximate_spread_label.text()
     finally:
         window.close()
@@ -291,6 +292,35 @@ def test_default_probability_horizons(q, put_years, bond_years, expected):
 def test_default_probability_defaults_to_one_year():
     from desktop.bond_record import BondRecordWindow
     assert BondRecordWindow.calculate_default_probability(0.36, 2) == pytest.approx(0.2)
+
+
+def test_two_model_spreads_display_without_working(monkeypatch):
+    import desktop.bond_record as module
+    app = QApplication.instance() or QApplication([])
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    maturity = today + pd.Timedelta(days=730)
+    window = module.BondRecordWindow(pd.DataFrame({"MATURITY": [maturity]}))
+    calls = []
+    def model(*args, **kwargs):
+        calls.append(args)
+        return .02, .012
+    monkeypatch.setattr(module, "calculate_merton_spread", model)
+    try:
+        window.interest_rate = 4.
+        window.loss_given_default = .6
+        window.option_results = pd.DataFrame({
+            "PX_ASK": [.1], "STRIKE_PX": [7.5], "EXPIRE_DT": [today + pd.Timedelta(days=365)],
+            "UNDERLYING_CUR_MKT_CAP": [1000.], "UNDERLYING_BS_ST_BORROW": [50.],
+            "UNDERLYING_BS_LT_BORROW": [100.], "UNDERLYING_VOLATILITY(CALC_INTERVAL=260D)": [30.],
+        })
+        window._update_approximate_spread()
+        assert "DOOTM credit spread:" in window.approximate_spread_label.text()
+        assert "Merton credit spread: 1.2000% (120.00 bps)" in window.merton_spread_label.text()
+        assert calls[0] == (1000., 50., 100., 4., maturity, 30., .6)
+        assert not hasattr(window, "calculation_label")
+    finally:
+        window.close()
+        app.processEvents()
 
 
 @pytest.mark.parametrize("values", [(1, 1, 2), (-0.1, 1, 2), (0.2, 0, 2),

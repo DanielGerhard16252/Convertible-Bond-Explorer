@@ -22,7 +22,7 @@ Run the following from the repository root in Windows PowerShell. Use Python 3.1
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install PySide6 pandas "pydantic>=2" python-dotenv openai pytest
+.\.venv\Scripts\python.exe -m pip install PySide6 pandas scipy "pydantic>=2" python-dotenv openai pytest
 ```
 
 Dependencies are currently installed explicitly: `pyproject.toml` contains pytest configuration but does not declare application dependencies or a pinned environment.
